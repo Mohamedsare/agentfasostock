@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import {
   ArrowRight,
   Bot,
@@ -72,26 +73,15 @@ export default function LandingPage() {
 
       {/* Dashboard preview */}
       <section className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
-          <div className="flex items-center gap-1.5 border-b border-border bg-muted/50 px-4 py-3">
-            <span className="size-3 rounded-full bg-destructive/60" />
-            <span className="size-3 rounded-full bg-warning/60" />
-            <span className="size-3 rounded-full bg-success/60" />
-            <span className="ml-3 text-xs text-muted-foreground">dashboard.fasostock</span>
-          </div>
-          <div className="grid gap-4 p-6 sm:grid-cols-4">
-            {[
-              { k: "Conversations", v: "128" },
-              { k: "Prospects chauds", v: "17" },
-              { k: "Qualifiés", v: "34" },
-              { k: "Taux conversion", v: "21%" },
-            ].map((s) => (
-              <div key={s.k} className="rounded-xl border border-border bg-background p-4">
-                <p className="text-xs text-muted-foreground">{s.k}</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{s.v}</p>
-              </div>
-            ))}
-          </div>
+        <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
+          <Image
+            src="/images/im2.png"
+            alt="Aperçu du dashboard FasoStock WhatsApp Agent"
+            width={1086}
+            height={1448}
+            className="h-auto w-full"
+            priority
+          />
         </div>
       </section>
 

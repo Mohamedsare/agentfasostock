@@ -64,6 +64,43 @@ export async function sendLeadEmail(input: LeadEmailInput): Promise<EmailSendRes
   }
 }
 
+/**
+ * Send a simple diagnostic email to the admin to verify the Resend setup
+ * end-to-end (API key, sender domain, recipient). Returns the exact provider
+ * error when it fails so misconfiguration is obvious.
+ */
+export async function sendTestEmail(): Promise<EmailSendResult> {
+  const subject = "✅ Test d'envoi — FasoStock WhatsApp Agent";
+
+  if (!features.resend) {
+    return {
+      ok: false,
+      subject,
+      error:
+        "Resend non configuré : définissez RESEND_API_KEY et ADMIN_EMAIL dans .env.local.",
+    };
+  }
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: serverEnv.resendFromEmail,
+      to: serverEnv.adminEmail,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;padding:24px;color:#111827">
+        <h2 style="color:#16a34a;margin:0 0 8px">Configuration email OK ✅</h2>
+        <p style="font-size:14px;color:#334155">Cet email confirme que l'envoi via Resend fonctionne.</p>
+        <p style="font-size:13px;color:#64748b">Expéditeur : ${escapeHtml(serverEnv.resendFromEmail)}<br/>Destinataire : ${escapeHtml(serverEnv.adminEmail)}</p>
+      </div>`,
+    });
+    if (error) return { ok: false, subject, error: error.message };
+    return { ok: true, id: data?.id, subject };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "send error";
+    console.error("[email] test send failed:", message);
+    return { ok: false, subject, error: message };
+  }
+}
+
 function renderLeadEmail(input: LeadEmailInput): string {
   const { contact, conversation, recentMessages = [] } = input;
   const name = contact.name?.trim() || contact.phone;

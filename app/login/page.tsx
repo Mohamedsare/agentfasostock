@@ -42,20 +42,20 @@ export default async function LoginPage({
         </div>
 
         <div className="w-full max-w-sm">
-          <div className="mb-8 lg:hidden">
+          <div className="mb-8 flex justify-center lg:hidden">
             <Logo />
           </div>
 
-          <div className="mb-6 space-y-1">
+          <div className="mb-6 space-y-1 text-center">
             <h1 className="text-2xl font-bold tracking-tight">Connexion admin</h1>
-            <p className="text-sm text-muted-foreground">Accédez à votre tableau de bord FasoStock.</p>
+            <p className="text-sm text-muted-foreground">Accédez à votre tableau de bord FasoStock WhatsApp Agent.</p>
           </div>
 
           <LoginForm redirectTo={redirectTo} demoMode={!isSupabaseConfigured} />
 
           <Link
             href="/"
-            className="mt-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            className="mt-6 inline-flex w-full items-center justify-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="size-4" /> Retour à l'accueil
           </Link>

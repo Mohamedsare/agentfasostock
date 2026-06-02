@@ -86,7 +86,7 @@ export const agentSettingsSchema = z.object({
   agent_name: z.string().min(2),
   tone: z.enum(["professionnel", "amical", "direct", "chaleureux"]),
   language: z.string().min(2),
-  welcome_message: z.string().min(2),
+  welcome_message: z.string().max(1000).default(""),
   system_prompt: z.string().min(10),
   qualification_rules: z.string().default(""),
   human_handoff_rules: z.string().default(""),
