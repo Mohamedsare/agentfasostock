@@ -101,9 +101,24 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
   const key = msg.key ?? {};
   const fromMe: boolean = Boolean(key.fromMe ?? msg.fromMe);
 
-  const remoteJid: string =
-    key.remoteJid ?? msg.remoteJid ?? msg.from ?? p.from ?? "";
-  const from = normalizePhone(remoteJid);
+  // Resolve the sender's real phone. WhatsApp now sometimes addresses contacts
+  // with an opaque "@lid" identifier instead of their phone "@s.whatsapp.net".
+  // Baileys (used by Wasender) carries the real phone in senderPn/remoteJidAlt,
+  // so we collect every candidate and prefer a genuine phone JID over a LID.
+  const candidates: string[] = [
+    key.senderPn,
+    key.remoteJidAlt,
+    msg.senderPn,
+    msg.remoteJidAlt,
+    p.senderPn,
+    key.remoteJid,
+    msg.remoteJid,
+    msg.from,
+    p.from,
+  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+
+  const phoneJid = candidates.find((c) => c.includes("@s.whatsapp.net"));
+  const from = normalizePhone(phoneJid ?? candidates[0] ?? "");
   if (!from) return null;
 
   const text: string =

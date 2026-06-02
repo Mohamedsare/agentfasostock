@@ -2,6 +2,23 @@ import type { NextRequest } from "next/server";
 import { parseWasenderWebhook } from "@/lib/wasender";
 import { handleInboundMessage } from "@/lib/engine";
 import { serverEnv, features, isSupabaseConfigured } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/admin";
+
+/** Store the raw webhook body in audit_logs for debugging (best-effort). */
+async function captureRawPayload(payload: unknown) {
+  if (!isSupabaseConfigured) return;
+  try {
+    const db = createAdminClient();
+    await db.from("audit_logs").insert({
+      actor: "wasender",
+      action: "webhook_raw",
+      entity: "webhook",
+      metadata: payload as Record<string, unknown>,
+    });
+  } catch {
+    // never block the webhook on logging
+  }
+}
 
 export const dynamic = "force-dynamic";
 // The handler waits on an LLM call + WhatsApp send; allow more than the 10s default.
@@ -53,6 +70,10 @@ export async function POST(req: NextRequest) {
   } catch {
     return new Response("invalid json", { status: 400 });
   }
+
+  // Best-effort capture of the raw payload for debugging webhook shape issues
+  // (e.g. @lid vs phone JID). Stored in audit_logs; safe to disable later.
+  await captureRawPayload(payload);
 
   const inbound = parseWasenderWebhook(payload);
   if (!inbound) {
