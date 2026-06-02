@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 /** Desktop sidebar — fixed, dark, full height. */
 export function Sidebar() {
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+    <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
       <Link href="/dashboard" className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5 text-white">
         <Logo />
       </Link>
