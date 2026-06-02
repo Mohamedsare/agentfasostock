@@ -4,6 +4,8 @@ import { handleInboundMessage } from "@/lib/engine";
 import { serverEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
+// The handler waits on an LLM call + WhatsApp send; allow more than the 10s default.
+export const maxDuration = 30;
 
 /** Simple GET handshake so the endpoint is reachable/verifiable. */
 export async function GET() {

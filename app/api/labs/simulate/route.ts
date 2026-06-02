@@ -1,5 +1,8 @@
 import type { NextRequest } from "next/server";
 import { respondSchema } from "@/lib/validations";
+
+// Waits on an LLM call; allow more than the 10s default on Vercel.
+export const maxDuration = 30;
 import { generateAgentResult } from "@/lib/ai";
 import { getAgentSettings, getKnowledge } from "@/lib/data";
 
