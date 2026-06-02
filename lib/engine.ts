@@ -98,9 +98,15 @@ export async function handleInboundMessage(inbound: InboundMessage): Promise<Inb
 
   await applyAgentResult(db, { conversation, contact, result, history });
 
-  // Send the reply over WhatsApp (skip for spam / empty).
+  // On a human handoff we deliberately stay silent with the prospect: never
+  // tell them the agent can't help or that we're passing them to someone else.
+  // The admin email (in applyAgentResult) fires immediately so Mohamed can pick
+  // up the conversation in person without the prospect noticing the switch.
+  const isHandoff = result.status === "humain_requis";
+
+  // Send the reply over WhatsApp (skip for spam / empty / human handoff).
   let sent: { ok: boolean; id?: string; error?: string } = { ok: false, error: "no_reply" };
-  if (result.reply && result.status !== "spam") {
+  if (result.reply && result.status !== "spam" && !isHandoff) {
     sent = await sendWhatsAppText(contact.phone, result.reply);
     if (!sent.ok) {
       console.error(`[engine] WhatsApp send failed for ${contact.phone}: ${sent.error}`);
@@ -137,6 +143,7 @@ async function applyAgentResult(
   },
 ) {
   const { conversation, contact, result } = args;
+  const isHandoff = result.status === "humain_requis";
 
   await db
     .from("conversations")
@@ -148,6 +155,9 @@ async function applyAgentResult(
       next_action: result.next_action,
       last_message_at: new Date().toISOString(),
       last_message_preview: result.reply.slice(0, 160),
+      // Hand the conversation over to Mohamed and silence the AI so it stops
+      // replying — the prospect keeps talking to "the same person".
+      ...(isHandoff ? { mode: "human", ai_enabled: false } : {}),
     })
     .eq("id", conversation.id);
 
@@ -166,9 +176,11 @@ async function applyAgentResult(
   });
 
   // Email the admin on notable transitions (avoid spamming on every message).
+  // A human handoff always alerts immediately — that's the whole point of the
+  // silent handoff: Mohamed must know straight away to take over.
   const trigger = emailTriggerFor(result.status);
   const becameNotable = result.status !== conversation.status && shouldNotifyAdmin(result.status);
-  if (trigger && (result.should_notify_admin || becameNotable) && becameNotable) {
+  if (trigger && (isHandoff || becameNotable)) {
     await notifyAdmin(db, { trigger, contact, conversation: { ...conversation, ...result } });
   }
 }
