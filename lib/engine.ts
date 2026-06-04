@@ -345,28 +345,68 @@ async function deliverReply(
 // ─────────────────────────── helpers ───────────────────────────
 
 async function upsertContact(db: Db, inbound: InboundMessage): Promise<Contact> {
-  const { data: existing } = await db
-    .from("contacts")
-    .select("*")
-    .eq("phone", inbound.from)
-    .maybeSingle();
-
-  if (existing) {
-    // Fill in the name from the WhatsApp profile if we didn't have one.
-    if (!existing.name && inbound.name) {
-      await db.from("contacts").update({ name: inbound.name }).eq("id", existing.id);
-      existing.name = inbound.name;
-    }
-    return existing as Contact;
+  // Match by phone first; fall back to the WhatsApp "@lid" id so the same person
+  // resolves to a single contact even when a webhook omits the phone (which
+  // otherwise spawns a duplicate contact and "loses" the conversation history).
+  // All lid handling degrades gracefully if migration 0002 hasn't run yet.
+  let existing: Contact | null = null;
+  {
+    const byPhone = await db.from("contacts").select("*").eq("phone", inbound.from).maybeSingle();
+    existing = (byPhone.data as Contact) ?? null;
+  }
+  if (!existing && inbound.lid) {
+    const byLid = await db.from("contacts").select("*").eq("lid", inbound.lid).maybeSingle();
+    if (!byLid.error) existing = (byLid.data as Contact) ?? null;
   }
 
-  const { data: created, error } = await db
+  if (existing) {
+    // Backfill name, lid, and upgrade a lid-only phone to the real one.
+    const patch: Partial<Contact> = {};
+    if (!existing.name && inbound.name) patch.name = inbound.name;
+    if (!existing.lid && inbound.lid) patch.lid = inbound.lid;
+    // A contact first created from a lid-only webhook carries the lid digits as
+    // its "phone"; once a real phone shows up, adopt it (guard the unique key).
+    if (existing.phone !== inbound.from && isLidLike(existing.phone) && !isLidLike(inbound.from)) {
+      patch.phone = inbound.from;
+    }
+    if (Object.keys(patch).length) {
+      let { error } = await db.from("contacts").update(patch).eq("id", existing.id);
+      // Retry without `lid` if the column doesn't exist yet (pre-migration).
+      if (error && "lid" in patch && isMissingLidColumn(error)) {
+        const { lid: _omit, ...rest } = patch;
+        ({ error } = await db.from("contacts").update(rest).eq("id", existing.id));
+        if (!error) Object.assign(existing, rest);
+      } else if (!error) {
+        // A phone collision means a real-phone contact already exists; keep the
+        // existing row rather than failing the whole inbound message.
+        Object.assign(existing, patch);
+      }
+    }
+    return existing;
+  }
+
+  const base = { phone: inbound.from, name: inbound.name, source: "whatsapp" as const };
+  let { data: created, error } = await db
     .from("contacts")
-    .insert({ phone: inbound.from, name: inbound.name, source: "whatsapp" })
+    .insert({ ...base, lid: inbound.lid })
     .select("*")
     .single();
+  if (error && isMissingLidColumn(error)) {
+    ({ data: created, error } = await db.from("contacts").insert(base).select("*").single());
+  }
   if (error || !created) throw new Error(`contact upsert failed: ${error?.message}`);
   return created as Contact;
+}
+
+/** A WhatsApp "@lid" id reduces to ~15+ digits — longer than any real phone. */
+function isLidLike(value: string): boolean {
+  return /^\d{15,}$/.test(value);
+}
+
+/** True when an error is "contacts.lid column doesn't exist" (migration 0002 pending). */
+function isMissingLidColumn(error: { message?: string; code?: string }): boolean {
+  const m = (error.message ?? "").toLowerCase();
+  return m.includes("lid") && (m.includes("column") || m.includes("schema cache"));
 }
 
 async function getOrCreateConversation(db: Db, contactId: string): Promise<Conversation> {

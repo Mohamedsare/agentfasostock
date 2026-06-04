@@ -17,7 +17,7 @@ import type {
 const now = Date.now();
 const ago = (mins: number) => new Date(now - mins * 60_000).toISOString();
 
-export const mockContacts: Contact[] = [
+export const mockContacts: Contact[] = ([
   { id: "c1", phone: "22670112233", name: "Awa Ouédraogo", business_type: "Boutique de cosmétiques", city: "Ouagadougou", need: "Suivre son stock et éviter les ruptures", source: "whatsapp", created_at: ago(2880), updated_at: ago(12) },
   { id: "c2", phone: "22675445566", name: "Issouf Traoré", business_type: "Quincaillerie", city: "Bobo-Dioulasso", need: "Gérer plusieurs références et fournisseurs", source: "whatsapp", created_at: ago(4320), updated_at: ago(35) },
   { id: "c3", phone: "22678990011", name: "Fatim Sawadogo", business_type: "Grossiste alimentaire", city: "Ouagadougou", need: "Démonstration avant achat", source: "whatsapp", created_at: ago(1440), updated_at: ago(90) },
@@ -26,7 +26,7 @@ export const mockContacts: Contact[] = [
   { id: "c6", phone: "22677665544", name: "Salif Kaboré", business_type: "Restaurant", city: "Banfora", need: "Problème de connexion à l'app", source: "whatsapp", created_at: ago(10080), updated_at: ago(240) },
   { id: "c7", phone: "22675009988", name: "Mariam Compaoré", business_type: "Boutique de vêtements", city: "Ouagadougou", need: "A converti — accompagnement", source: "whatsapp", created_at: ago(20160), updated_at: ago(720) },
   { id: "c8", phone: "22678112200", name: "Yacouba Diallo", business_type: "Vente de pièces auto", city: "Ouagadougou", need: "Hésite encore", source: "whatsapp", created_at: ago(3000), updated_at: ago(2000) },
-];
+] as Omit<Contact, "lid">[]).map((c) => ({ ...c, lid: null }));
 
 export const mockConversations: ConversationWithContact[] = [
   conv("conv1", "c1", "prospect_chaud", 88, "ai", "demo", "Awa gère une boutique de cosmétiques à Ouaga, perd des ventes par rupture de stock. Très intéressée, demande une démo.", "Planifier une démonstration cette semaine.", ago(12), "Super, je suis dispo jeudi après-midi 👍", 0, true),

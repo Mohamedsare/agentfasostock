@@ -132,6 +132,47 @@ console.log("\n── 7. Évènement non-message (statut) → ignoré (null) ─
   check("retourne null", r === null, r);
 }
 
+console.log("\n── 7b. Adressage @lid : phone résolu + lid capturé (anti-doublon) ──");
+{
+  const r = parseWasenderWebhook({
+    event: "messages.received",
+    data: {
+      messages: {
+        key: {
+          id: "LIDMSG1",
+          fromMe: false,
+          senderPn: "22655889119@s.whatsapp.net",
+          remoteJid: "154426253816038@lid",
+          senderLid: "154426253816038@lid",
+          cleanedSenderPn: "22655889119",
+        },
+        pushName: "Awa Lid",
+        messageTimestamp: 1733300000,
+        message: { conversation: "Bonjour via lid" },
+      },
+    },
+  });
+  check("from = vrai numéro (pas le lid)", r?.from === "22655889119", r?.from);
+  check("lid capturé", r?.lid === "154426253816038@lid", r?.lid);
+}
+
+console.log("\n── 7c. lid-only (sans senderPn) → from = lid, lid capturé ──");
+{
+  const r = parseWasenderWebhook({
+    event: "messages.received",
+    data: {
+      messages: {
+        key: { id: "LIDMSG2", fromMe: false, remoteJid: "154426253816038@lid" },
+        pushName: "Awa Lid",
+        messageTimestamp: 1733300000,
+        message: { conversation: "Bonjour lid seul" },
+      },
+    },
+  });
+  check("from = digits du lid (fallback)", r?.from === "154426253816038", r?.from);
+  check("lid capturé", r?.lid === "154426253816038@lid", r?.lid);
+}
+
 void (async () => {
   console.log("\n── 8. Couche média : dégradation propre sans clé OpenAI ──");
   const t = await transcribeAudio("https://example.com/a.ogg", "audio/ogg");

@@ -72,6 +72,8 @@ export interface Profile {
 export interface Contact {
   id: string;
   phone: string;
+  /** WhatsApp opaque "@lid" identifier, when the phone isn't always sent. */
+  lid: string | null;
   name: string | null;
   business_type: string | null;
   city: string | null;

@@ -40,6 +40,8 @@ export interface InboundMedia {
 /** Normalised inbound message extracted from a Wasender webhook. */
 export interface InboundMessage {
   from: string; // phone number / JID, normalised to digits
+  /** WhatsApp opaque "@lid" id (full jid, e.g. "1234@lid"), when present. */
+  lid: string | null;
   name: string | null;
   text: string; // text body or media caption ("" for bare media)
   kind: InboundKind;
@@ -287,8 +289,10 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
   // so we collect every candidate and prefer a genuine phone JID over a LID.
   const candidates: string[] = [
     key.senderPn,
+    key.cleanedSenderPn,
     key.remoteJidAlt,
     msg.senderPn,
+    msg.cleanedSenderPn,
     msg.remoteJidAlt,
     p.senderPn,
     key.remoteJid,
@@ -297,9 +301,20 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
     p.from,
   ].filter((v): v is string => typeof v === "string" && v.length > 0);
 
-  const phoneJid = candidates.find((c) => c.includes("@s.whatsapp.net"));
+  // Prefer a genuine phone JID; a plain digit string (cleanedSenderPn) is also
+  // a real phone. Only fall back to a "@lid" id when no phone form is present.
+  const phoneJid =
+    candidates.find((c) => c.includes("@s.whatsapp.net")) ??
+    candidates.find((c) => !c.includes("@lid") && /\d/.test(c));
   const from = normalizePhone(phoneJid ?? candidates[0] ?? "");
   if (!from) return null;
+
+  // Capture the opaque "@lid" id so the same person resolves to one contact
+  // even on webhooks that omit the phone (see migration 0002).
+  const lidJid = [key.senderLid, msg.senderLid, key.remoteJid, msg.remoteJid].find(
+    (v): v is string => typeof v === "string" && v.includes("@lid"),
+  );
+  const lid = lidJid ?? null;
 
   // Plain text (or the unified messageBody Wasender flattens captions into).
   const plainText: string =
@@ -325,6 +340,7 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
 
   return {
     from,
+    lid,
     name: msg.pushName ?? msg.notifyName ?? p.pushName ?? null,
     text: text || media?.caption?.trim() || "",
     kind,
