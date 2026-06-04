@@ -102,39 +102,44 @@ export async function connectAgentWhatsApp(agentId: string): Promise<ConnectResu
   const supabase = await createClient();
   const { data: agent } = await supabase
     .from("agents")
-    .select("id, name, wasender_session_id")
+    .select("id, name, wasender_session_id, wasender_session_ref")
     .eq("id", agentId)
     .maybeSingle();
   if (!agent) return { ok: false, error: "Agent introuvable." };
 
-  const webhookUrl = `${serverEnv.appUrl.replace(/\/$/, "")}/api/webhooks/wasender`;
+  const secret = serverEnv.wasenderWebhookSecret;
+  const webhookUrl =
+    `${serverEnv.appUrl.replace(/\/$/, "")}/api/webhooks/wasender` +
+    (secret ? `?secret=${encodeURIComponent(secret)}` : "");
 
-  // Reuse an existing session id or create one.
-  let sessionId = (agent as { wasender_session_id?: string | null }).wasender_session_id ?? null;
-  let sessionKey: string | null = null;
-  if (!sessionId) {
+  // A Wasender session has a numeric `ref` (management URLs) and an `api_key`
+  // (send + webhook routing). Reuse an existing ref or create a new session.
+  let ref = (agent as { wasender_session_ref?: string | null }).wasender_session_ref ?? null;
+  let apiKey = (agent as { wasender_session_id?: string | null }).wasender_session_id ?? null;
+  if (!ref) {
     const created = await createSession((agent as { name: string }).name, webhookUrl);
     if (!created.ok || !created.data) {
       return { ok: false, error: created.error ?? "Création de session échouée." };
     }
     const d = created.data as Record<string, unknown>;
-    sessionId = String(d.id ?? d.session_id ?? d.sessionId ?? "");
+    ref = d.id != null ? String(d.id) : null;
     const k = d.api_key ?? d.apiKey ?? d.token;
-    sessionKey = typeof k === "string" ? k : null;
-    if (!sessionId) return { ok: false, error: "Réponse Wasender inattendue (pas d'id de session)." };
+    apiKey = typeof k === "string" ? k : apiKey;
+    if (!ref) return { ok: false, error: "Réponse Wasender inattendue (pas d'id de session)." };
   }
 
-  await connectSession(sessionId);
-  const qrRes = await getSessionQr(sessionId);
-  const qr =
-    (qrRes.data as { qr?: string; qrcode?: string } | undefined)?.qr ??
-    (qrRes.data as { qrcode?: string } | undefined)?.qrcode;
+  await connectSession(ref);
+  const qrRes = await getSessionQr(ref);
+  const qrData = (qrRes.data ?? {}) as { qr?: string; qrcode?: string; qrCode?: string };
+  const qr = qrData.qr ?? qrData.qrcode ?? qrData.qrCode;
 
   const { error } = await supabase
     .from("agents")
     .update({
-      wasender_session_id: sessionId,
-      ...(sessionKey ? { wasender_session_key_enc: encryptSecret(sessionKey) } : {}),
+      wasender_session_ref: ref,
+      ...(apiKey
+        ? { wasender_session_id: apiKey, wasender_session_key_enc: encryptSecret(apiKey) }
+        : {}),
       connection_status: "connecting",
     })
     .eq("id", agentId);
@@ -153,25 +158,28 @@ export async function refreshAgentConnection(agentId: string): Promise<ActionRes
   const supabase = await createClient();
   const { data: agent } = await supabase
     .from("agents")
-    .select("id, wasender_session_id, wasender_session_key_enc")
+    .select("id, wasender_session_id, wasender_session_ref, wasender_session_key_enc")
     .eq("id", agentId)
     .maybeSingle();
-  const sessionId = (agent as { wasender_session_id?: string | null } | null)?.wasender_session_id;
-  if (!sessionId) return { ok: false, error: "Aucune session à vérifier." };
+  const ref = (agent as { wasender_session_ref?: string | null } | null)?.wasender_session_ref;
+  if (!ref) return { ok: false, error: "Aucune session à vérifier." };
 
-  const res = await getSession(sessionId);
+  const res = await getSession(ref);
   const data = (res.data ?? {}) as { status?: string; api_key?: string; phone_number?: string };
   const connected = (data.status ?? "").toLowerCase().includes("connected");
 
   const hasKey = Boolean(
-    (agent as { wasender_session_key_enc?: string | null }).wasender_session_key_enc,
+    (agent as { wasender_session_id?: string | null }).wasender_session_id,
   );
   const { error } = await supabase
     .from("agents")
     .update({
       connection_status: connected ? "connected" : "connecting",
       ...(data.phone_number ? { phone_number: data.phone_number } : {}),
-      ...(!hasKey && data.api_key ? { wasender_session_key_enc: encryptSecret(data.api_key) } : {}),
+      // Capture the api_key (send + routing) once Wasender exposes it.
+      ...(!hasKey && data.api_key
+        ? { wasender_session_id: data.api_key, wasender_session_key_enc: encryptSecret(data.api_key) }
+        : {}),
     })
     .eq("id", agentId);
   if (error) return { ok: false, error: error.message };

@@ -18,9 +18,12 @@ export const ACTIVE_AGENT_COOKIE = "active_agent_id";
 /** Build a per-request context (decrypted keys + fallbacks) from an agent row. */
 export function buildAgentContext(agent: Agent, org: Organization | null): AgentContext {
   const orgKey = org?.openai_api_key_enc ? decryptSecret(org.openai_api_key_enc) : null;
+  // The per-session api_key (stored plaintext in wasender_session_id for webhook
+  // routing) is also the bearer key used to send; prefer the encrypted copy.
+  const wasenderKey = decryptSecret(agent.wasender_session_key_enc) ?? agent.wasender_session_id;
   return {
     agent,
-    wasenderKey: decryptSecret(agent.wasender_session_key_enc),
+    wasenderKey,
     wasenderBaseUrl: serverEnv.wasenderBaseUrl,
     openaiKey: orgKey || serverEnv.platformOpenaiApiKey,
     adminWhatsapp: agent.admin_whatsapp || serverEnv.adminWhatsapp,

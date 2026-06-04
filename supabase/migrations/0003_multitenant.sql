@@ -22,7 +22,10 @@ create table if not exists agents (
   org_id uuid not null references organizations(id) on delete cascade,
   name text not null default 'Agent',
   -- routing + per-session credentials
+  -- wasender_session_id = per-session api_key (webhook routing + send bearer)
   wasender_session_id text unique,
+  -- wasender_session_ref = numeric Wasender session id (management API URLs)
+  wasender_session_ref text,
   wasender_session_key_enc text,
   phone_number text,
   connection_status text not null default 'disconnected',
@@ -90,16 +93,18 @@ begin
     select * into s from agent_settings limit 1;
 
     insert into agents (
-      org_id, name, wasender_session_id, admin_whatsapp,
+      org_id, name, wasender_session_id, wasender_session_ref, connection_status,
+      admin_whatsapp,
       agent_name, tone, language, welcome_message, system_prompt,
       qualification_rules, human_handoff_rules, qualified_threshold, hot_threshold,
       ai_enabled, operating_mode
     ) values (
       v_org_id, 'FasoStock',
       '729e2b638510546a77f97e82f1f52ca81fb9d694e68b59943077bf2670018858',
+      '89993', 'connected',
       '+212771668079',
       coalesce(s.agent_name, 'Awa — Assistante FasoStock'),
-      coalesce(s.tone, 'professionnel'),
+      coalesce(s.tone, 'professionnel'::agent_tone),
       coalesce(s.language, 'fr'),
       coalesce(s.welcome_message, ''),
       coalesce(s.system_prompt, ''),
@@ -108,7 +113,7 @@ begin
       coalesce(s.qualified_threshold, 70),
       coalesce(s.hot_threshold, 85),
       coalesce(s.ai_enabled, true),
-      coalesce(s.operating_mode, 'hybride')
+      coalesce(s.operating_mode, 'hybride'::agent_mode)
     ) returning id into ag_id;
 
     update contacts set agent_id = ag_id where agent_id is null;

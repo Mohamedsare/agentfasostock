@@ -183,9 +183,14 @@ export interface Agent extends AgentSettings {
   org_id: string;
   /** Internal label for the agent (distinct from the persona `agent_name`). */
   name: string;
-  /** Wasender session id used to route inbound webhooks to this agent. */
+  /**
+   * Wasender per-session api_key. Doubles as the inbound webhook `sessionId`
+   * (routing) AND the bearer key to send messages.
+   */
   wasender_session_id: string | null;
-  /** Encrypted per-session Wasender key used to send messages. */
+  /** Wasender numeric session id, used in session-management API URLs (QR/status). */
+  wasender_session_ref: string | null;
+  /** Encrypted copy of the per-session key (optional; plaintext id is the source). */
   wasender_session_key_enc: string | null;
   phone_number: string | null;
   connection_status: AgentConnectionStatus;
