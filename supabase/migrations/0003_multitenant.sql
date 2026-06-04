@@ -142,13 +142,33 @@ $$;
 alter table organizations enable row level security;
 alter table agents enable row level security;
 
+-- A new user has no org yet, so org creation is gated by ownership, not
+-- current_org_id() (which would be NULL on first signup).
 drop policy if exists "org_self" on organizations;
-create policy "org_self" on organizations for all to authenticated
-  using (id = current_org_id()) with check (id = current_org_id());
+drop policy if exists "org_select" on organizations;
+create policy "org_select" on organizations for select to authenticated
+  using (id = current_org_id() or owner_id = auth.uid());
+drop policy if exists "org_insert" on organizations;
+create policy "org_insert" on organizations for insert to authenticated
+  with check (owner_id = auth.uid());
+drop policy if exists "org_update" on organizations;
+create policy "org_update" on organizations for update to authenticated
+  using (id = current_org_id() or owner_id = auth.uid())
+  with check (id = current_org_id() or owner_id = auth.uid());
+drop policy if exists "org_delete" on organizations;
+create policy "org_delete" on organizations for delete to authenticated
+  using (owner_id = auth.uid());
 
 drop policy if exists "agents_org" on agents;
 create policy "agents_org" on agents for all to authenticated
-  using (org_id = current_org_id()) with check (org_id = current_org_id());
+  using (
+    org_id = current_org_id()
+    or org_id in (select id from organizations where owner_id = auth.uid())
+  )
+  with check (
+    org_id = current_org_id()
+    or org_id in (select id from organizations where owner_id = auth.uid())
+  );
 
 -- profiles: see your own row and org-mates; only edit your own.
 drop policy if exists "authenticated_all" on profiles;
