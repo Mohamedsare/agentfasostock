@@ -64,6 +64,10 @@ export const serverEnv = {
   get adminEmail() {
     return required("ADMIN_EMAIL", process.env.ADMIN_EMAIL);
   },
+  /** Phone (E.164) that receives lead alerts over WhatsApp instead of email. */
+  get adminWhatsapp() {
+    return process.env.ADMIN_WHATSAPP || "+212771668079";
+  },
   get appUrl() {
     return process.env.APP_URL || "http://localhost:3000";
   },

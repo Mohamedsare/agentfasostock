@@ -1,8 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateAgentResult } from "@/lib/ai";
-import { sendWhatsAppText, type InboundMessage } from "@/lib/wasender";
-import { sendLeadEmail } from "@/lib/email";
+import { sendWhatsAppText, sendLeadWhatsApp, type InboundMessage } from "@/lib/wasender";
 import { scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
 import type {
@@ -190,7 +189,8 @@ async function notifyAdmin(
   args: { trigger: EmailTrigger; contact: Contact; conversation: Conversation & AgentResult },
 ) {
   const { trigger, contact, conversation } = args;
-  const sent = await sendLeadEmail({
+  // Mohamed is alerted over WhatsApp (not email) when a lead becomes notable.
+  const sent = await sendLeadWhatsApp({
     trigger,
     contact,
     conversation: {
@@ -202,10 +202,15 @@ async function notifyAdmin(
     } as Conversation,
   });
 
+  if (!sent.ok) {
+    console.error(`[engine] admin WhatsApp alert failed (${trigger}): ${sent.error}`);
+  }
+
+  // Keep a notification trail even though the channel is now WhatsApp.
   await db.from("email_notifications").insert({
     trigger,
-    to_email: process.env.ADMIN_EMAIL ?? "",
-    subject: sent.subject,
+    to_email: process.env.ADMIN_WHATSAPP ?? "+212771668079",
+    subject: `WhatsApp · ${trigger}`,
     conversation_id: conversation.id,
     contact_id: contact.id,
     status: sent.ok ? "sent" : "failed",

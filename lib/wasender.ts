@@ -1,5 +1,7 @@
 import "server-only";
 import { serverEnv, features } from "@/lib/env";
+import { LEAD_STATUS_META } from "@/lib/constants";
+import type { Contact, Conversation, EmailTrigger } from "@/lib/types";
 
 /**
  * Wasender API service (CLAUDE.md §18).
@@ -75,6 +77,49 @@ export async function sendWhatsAppText(to: string, text: string): Promise<SendRe
 
   console.error("[wasender] send failed:", lastError);
   return { ok: false, error: lastError };
+}
+
+const TRIGGER_HEADER: Record<EmailTrigger, (name: string) => string> = {
+  prospect_qualifie: (n) => `🟢 Prospect qualifié — ${n}`,
+  prospect_chaud: (n) => `🔥 Prospect chaud — ${n} (appeler vite)`,
+  client_converti: (n) => `🎉 Client converti — ${n}`,
+  humain_requis: (n) => `🙋 Reprise humaine requise — ${n}`,
+  support_important: (n) => `⚠️ Support important — ${n}`,
+};
+
+export interface LeadAlertInput {
+  trigger: EmailTrigger;
+  contact: Contact;
+  conversation: Conversation;
+}
+
+/**
+ * Send a lead alert to Mohamed over WhatsApp (replaces the admin email).
+ * Goes to ADMIN_WHATSAPP. Returns a SendResult so callers can log success.
+ */
+export async function sendLeadWhatsApp(input: LeadAlertInput): Promise<SendResult> {
+  const { trigger, contact, conversation } = input;
+  const name = contact.name?.trim() || contact.phone;
+  const statusLabel = LEAD_STATUS_META[conversation.status]?.label ?? conversation.status;
+  const appUrl = serverEnv.appUrl.replace(/\/$/, "");
+  const link = `${appUrl}/dashboard/conversations/${conversation.id}`;
+
+  const lines = [
+    TRIGGER_HEADER[trigger](name),
+    "",
+    `📞 ${contact.phone}`,
+    contact.business_type ? `🏪 Activité : ${contact.business_type}` : null,
+    contact.city ? `📍 Ville : ${contact.city}` : null,
+    `⭐ Score : ${conversation.score}/100`,
+    `📌 Statut : ${statusLabel}`,
+    contact.need ? `🎯 Besoin : ${contact.need}` : null,
+    conversation.summary ? `\n📝 Résumé : ${conversation.summary}` : null,
+    conversation.next_action ? `➡️ Action : ${conversation.next_action}` : null,
+    "",
+    `🔗 ${link}`,
+  ].filter((l): l is string => l !== null);
+
+  return sendWhatsAppText(serverEnv.adminWhatsapp, lines.join("\n"));
 }
 
 /** Format a phone/JID as E.164 (digits with a leading "+"), as Wasender expects. */
