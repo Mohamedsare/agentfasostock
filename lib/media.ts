@@ -43,9 +43,12 @@ export async function transcribeAudio(url: string, mimetype?: string): Promise<s
   try {
     const ext = extensionFor(mimetype ?? dl.mimetype);
     const file = await toFile(dl.bytes, `audio.${ext}`, { type: mimetype ?? dl.mimetype });
+    const language = serverEnv.openaiTranscribeLanguage;
     const result = await getClient().audio.transcriptions.create({
       file,
       model: serverEnv.openaiTranscribeModel,
+      // Pin the language so French/Mooré voice notes aren't mis-detected.
+      ...(language ? { language } : {}),
     });
     const text = result.text?.trim();
     return text || null;

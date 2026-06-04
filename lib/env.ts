@@ -56,6 +56,14 @@ export const serverEnv = {
   get openaiTranscribeModel() {
     return process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
   },
+  /**
+   * Primary language (ISO-639-1) of inbound voice notes. Forcing it stops
+   * Whisper mis-detecting French/Mooré audio as another language. Set to ""
+   * to let Whisper auto-detect.
+   */
+  get openaiTranscribeLanguage() {
+    return process.env.OPENAI_TRANSCRIBE_LANGUAGE ?? "fr";
+  },
   /** Text-to-speech model + voice for voice replies. */
   get openaiTtsModel() {
     return process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";

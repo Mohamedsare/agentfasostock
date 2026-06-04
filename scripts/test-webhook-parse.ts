@@ -66,9 +66,9 @@ console.log("\n── 2. Note vocale (voice note) ──");
   check("parsed", r !== null);
   check("kind=audio", r?.kind === "audio", r?.kind);
   check("ptt=true (voice note)", r?.media?.ptt === true, r?.media?.ptt);
-  check("url média présente", r?.media?.url?.startsWith("https://"), r?.media?.url);
+  check("url média présente", Boolean(r?.media?.url?.startsWith("https://")), r?.media?.url);
   check("mediaKey présente", Boolean(r?.media?.mediaKey), r?.media?.mediaKey);
-  check("mimetype audio", r?.media?.mimetype?.includes("ogg"), r?.media?.mimetype);
+  check("mimetype audio", Boolean(r?.media?.mimetype?.includes("ogg")), r?.media?.mimetype);
   check("rawMessage présent (pour décryptage)", Boolean(r?.rawMessage));
   check("rawMessage contient audioMessage", Boolean((r?.rawMessage as any)?.message?.audioMessage));
 }
