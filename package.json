@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "create-admin": "tsx scripts/create-admin.ts"
+    "create-admin": "tsx scripts/create-admin.ts",
+    "test:webhook": "tsx --tsconfig scripts/tsconfig.test.json scripts/test-webhook-parse.ts"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.11",

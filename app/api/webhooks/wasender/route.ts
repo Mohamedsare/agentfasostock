@@ -21,8 +21,9 @@ async function captureRawPayload(payload: unknown) {
 }
 
 export const dynamic = "force-dynamic";
-// The handler waits on an LLM call + WhatsApp send; allow more than the 10s default.
-export const maxDuration = 30;
+// The handler may chain media decrypt + transcription + LLM + TTS + upload +
+// WhatsApp send, so allow well beyond the 10s default.
+export const maxDuration = 60;
 
 /**
  * GET handshake + diagnostic. Reports which integrations are configured on the

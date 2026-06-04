@@ -52,6 +52,17 @@ export const serverEnv = {
   get openaiModel() {
     return process.env.OPENAI_MODEL || "gpt-4o-mini";
   },
+  /** Speech-to-text model for inbound voice notes. */
+  get openaiTranscribeModel() {
+    return process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
+  },
+  /** Text-to-speech model + voice for voice replies. */
+  get openaiTtsModel() {
+    return process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
+  },
+  get openaiTtsVoice() {
+    return process.env.OPENAI_TTS_VOICE || "alloy";
+  },
   get openaiBaseUrl() {
     return process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
   },

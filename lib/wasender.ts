@@ -15,11 +15,37 @@ export interface SendResult {
   error?: string;
 }
 
+/** The kind of WhatsApp message received. */
+export type InboundKind =
+  | "text"
+  | "audio"
+  | "image"
+  | "video"
+  | "document"
+  | "sticker"
+  | "location"
+  | "contact"
+  | "other";
+
+/** Media metadata pulled from a media message (encrypted until decrypted). */
+export interface InboundMedia {
+  url: string;
+  mediaKey?: string;
+  mimetype?: string;
+  fileName?: string;
+  caption?: string;
+  ptt?: boolean; // true for voice notes (push-to-talk)
+}
+
 /** Normalised inbound message extracted from a Wasender webhook. */
 export interface InboundMessage {
   from: string; // phone number / JID, normalised to digits
   name: string | null;
-  text: string;
+  text: string; // text body or media caption ("" for bare media)
+  kind: InboundKind;
+  media?: InboundMedia;
+  /** Raw `data.messages` object, needed to decrypt media via Wasender. */
+  rawMessage?: Record<string, unknown>;
   messageId: string | null;
   timestamp: number; // epoch ms
   fromMe: boolean;
@@ -77,6 +103,115 @@ export async function sendWhatsAppText(to: string, text: string): Promise<SendRe
 
   console.error("[wasender] send failed:", lastError);
   return { ok: false, error: lastError };
+}
+
+/** Shape of the JSON Wasender returns from message/upload/decrypt endpoints. */
+interface WasenderResponse {
+  success?: boolean;
+  message?: string;
+  publicUrl?: string;
+  id?: string | number;
+  data?: { msgId?: string | number; id?: string | number };
+}
+
+/** Low-level POST to the Wasender /send-message endpoint with an arbitrary body. */
+async function postSendMessage(payload: Record<string, unknown>): Promise<SendResult> {
+  if (!features.wasender) return { ok: false, error: "wasender_not_configured" };
+  const url = `${serverEnv.wasenderBaseUrl.replace(/\/$/, "")}/send-message`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serverEnv.wasenderApiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json().catch(() => ({}))) as WasenderResponse;
+    if (!res.ok || data?.success === false) {
+      return { ok: false, error: `Wasender: ${data?.message ?? `HTTP ${res.status}`}` };
+    }
+    const id = data?.data?.msgId ?? data?.data?.id ?? data?.id;
+    return { ok: true, id: id ? String(id) : undefined };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+/** Send a WhatsApp voice note / audio message from a public URL. */
+export async function sendWhatsAppAudio(to: string, audioUrl: string): Promise<SendResult> {
+  if (!features.wasender) {
+    console.warn("[wasender] WASENDER_API_KEY not set — audio not sent (dev mode).");
+    return { ok: false, error: "wasender_not_configured" };
+  }
+  return postSendMessage({ to: toE164(to), audioUrl });
+}
+
+/** Send a WhatsApp image from a public URL, with an optional caption. */
+export async function sendWhatsAppImage(
+  to: string,
+  imageUrl: string,
+  caption?: string,
+): Promise<SendResult> {
+  if (!features.wasender) return { ok: false, error: "wasender_not_configured" };
+  return postSendMessage({ to: toE164(to), imageUrl, ...(caption ? { text: caption } : {}) });
+}
+
+/**
+ * Upload raw media bytes to Wasender and get back a public URL (valid ~24h)
+ * usable as audioUrl/imageUrl on a subsequent send. Body is the raw binary.
+ */
+export async function uploadMediaToWasender(
+  bytes: Uint8Array,
+  mimetype: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  if (!features.wasender) return { ok: false, error: "wasender_not_configured" };
+  const url = `${serverEnv.wasenderBaseUrl.replace(/\/$/, "")}/upload`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": mimetype,
+        Authorization: `Bearer ${serverEnv.wasenderApiKey}`,
+      },
+      body: bytes as BodyInit,
+    });
+    const data = (await res.json().catch(() => ({}))) as WasenderResponse;
+    if (!res.ok || data?.success === false || !data?.publicUrl) {
+      return { ok: false, error: `Wasender upload: ${data?.message ?? `HTTP ${res.status}`}` };
+    }
+    return { ok: true, url: String(data.publicUrl) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+  }
+}
+
+/**
+ * Decrypt an incoming WhatsApp media message and get a temporary public URL
+ * (valid ~1h). Pass the raw `data.messages` object from the webhook.
+ */
+export async function decryptMediaFile(
+  rawMessage: Record<string, unknown>,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  if (!features.wasender) return { ok: false, error: "wasender_not_configured" };
+  const url = `${serverEnv.wasenderBaseUrl.replace(/\/$/, "")}/decrypt-media`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serverEnv.wasenderApiKey}`,
+      },
+      body: JSON.stringify({ data: { messages: rawMessage } }),
+    });
+    const data = (await res.json().catch(() => ({}))) as WasenderResponse;
+    if (!res.ok || data?.success === false || !data?.publicUrl) {
+      return { ok: false, error: `Wasender decrypt: ${data?.message ?? `HTTP ${res.status}`}` };
+    }
+    return { ok: true, url: String(data.publicUrl) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+  }
 }
 
 const TRIGGER_HEADER: Record<EmailTrigger, (name: string) => string> = {
@@ -166,7 +301,8 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
   const from = normalizePhone(phoneJid ?? candidates[0] ?? "");
   if (!from) return null;
 
-  const text: string =
+  // Plain text (or the unified messageBody Wasender flattens captions into).
+  const plainText: string =
     msg.message?.conversation ??
     msg.message?.extendedTextMessage?.text ??
     msg.text ??
@@ -174,7 +310,14 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
     (typeof p.message === "string" ? p.message : "") ??
     "";
 
-  if (!text || typeof text !== "string") return null;
+  // Detect a media payload. WhatsApp wraps each kind in its own sub-object.
+  const m = (msg.message ?? {}) as Record<string, unknown>;
+  const { kind, media } = extractMedia(m);
+
+  // Without text and without a recognised media kind, this isn't a usable
+  // message (status update, receipt, reaction, etc.).
+  const text = typeof plainText === "string" ? plainText.trim() : "";
+  if (!text && kind === "text") return null;
 
   const tsRaw = msg.messageTimestamp ?? msg.timestamp ?? p.timestamp ?? Date.now();
   const ts = Number(tsRaw);
@@ -183,11 +326,45 @@ export function parseWasenderWebhook(payload: unknown): InboundMessage | null {
   return {
     from,
     name: msg.pushName ?? msg.notifyName ?? p.pushName ?? null,
-    text: text.trim(),
+    text: text || media?.caption?.trim() || "",
+    kind,
+    media,
+    rawMessage: msg as Record<string, unknown>,
     messageId: key.id ?? msg.id ?? null,
     timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
     fromMe,
   };
+}
+
+/** Identify the media kind in a WhatsApp `message` object and pull its fields. */
+function extractMedia(m: Record<string, unknown>): { kind: InboundKind; media?: InboundMedia } {
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const pick = (node: unknown): InboundMedia => {
+    const n = (node ?? {}) as Record<string, unknown>;
+    return {
+      url: str(n.url) ?? "",
+      mediaKey: str(n.mediaKey),
+      mimetype: str(n.mimetype),
+      fileName: str(n.fileName),
+      caption: str(n.caption),
+      ptt: Boolean(n.ptt),
+    };
+  };
+
+  if (m.audioMessage) return { kind: "audio", media: pick(m.audioMessage) };
+  if (m.imageMessage) return { kind: "image", media: pick(m.imageMessage) };
+  if (m.videoMessage) return { kind: "video", media: pick(m.videoMessage) };
+  if (m.documentMessage) return { kind: "document", media: pick(m.documentMessage) };
+  if (m.documentWithCaptionMessage) {
+    const inner = (m.documentWithCaptionMessage as Record<string, unknown>)?.message as
+      | Record<string, unknown>
+      | undefined;
+    return { kind: "document", media: pick(inner?.documentMessage) };
+  }
+  if (m.stickerMessage) return { kind: "sticker", media: pick(m.stickerMessage) };
+  if (m.locationMessage) return { kind: "location" };
+  if (m.contactMessage || m.contactsArrayMessage) return { kind: "contact" };
+  return { kind: "text" };
 }
 
 /** Reduce a phone/JID to digits (strips @s.whatsapp.net, +, spaces). */

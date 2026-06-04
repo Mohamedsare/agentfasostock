@@ -1,7 +1,16 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateAgentResult } from "@/lib/ai";
-import { sendWhatsAppText, sendLeadWhatsApp, type InboundMessage } from "@/lib/wasender";
+import {
+  sendWhatsAppText,
+  sendWhatsAppAudio,
+  sendLeadWhatsApp,
+  uploadMediaToWasender,
+  decryptMediaFile,
+  type InboundMessage,
+  type SendResult,
+} from "@/lib/wasender";
+import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
 import { scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
 import type {
@@ -35,11 +44,10 @@ export interface InboundResult {
  */
 export async function handleInboundMessage(inbound: InboundMessage): Promise<InboundResult> {
   if (inbound.fromMe) return { status: "ignored", reason: "outgoing_echo" };
-  if (!inbound.text) return { status: "ignored", reason: "empty" };
 
   const db = createAdminClient();
 
-  // Dedupe on the provider message id.
+  // Dedupe on the provider message id (before any costly media processing).
   if (inbound.messageId) {
     const { data: existing } = await db
       .from("messages")
@@ -49,6 +57,11 @@ export async function handleInboundMessage(inbound: InboundMessage): Promise<Inb
     if (existing) return { status: "duplicate" };
   }
 
+  // Turn whatever the client sent (text, voice, image, document…) into text the
+  // agent can reason about, and decide whether to answer with a voice note.
+  const resolved = await resolveInboundContent(inbound);
+  if (!resolved.text) return { status: "ignored", reason: "unsupported_or_empty" };
+
   const contact = await upsertContact(db, inbound);
   const conversation = await getOrCreateConversation(db, contact.id);
 
@@ -57,14 +70,14 @@ export async function handleInboundMessage(inbound: InboundMessage): Promise<Inb
     conversation_id: conversation.id,
     direction: "inbound",
     sender: "contact",
-    content: inbound.text,
+    content: resolved.text,
     wasender_id: inbound.messageId,
   });
   await db
     .from("conversations")
     .update({
       last_message_at: new Date(inbound.timestamp).toISOString(),
-      last_message_preview: inbound.text.slice(0, 160),
+      last_message_preview: resolved.text.slice(0, 160),
       unread_count: conversation.unread_count + 1,
     })
     .eq("id", conversation.id);
@@ -104,9 +117,13 @@ export async function handleInboundMessage(inbound: InboundMessage): Promise<Inb
   const isHandoff = result.status === "humain_requis";
 
   // Send the reply over WhatsApp (skip for spam / empty / human handoff).
-  let sent: { ok: boolean; id?: string; error?: string } = { ok: false, error: "no_reply" };
+  // When the client wrote by voice, answer by voice too (voice in → voice out).
+  let sent: SendResult = { ok: false, error: "no_reply" };
+  let repliedByVoice = false;
   if (result.reply && result.status !== "spam" && !isHandoff) {
-    sent = await sendWhatsAppText(contact.phone, result.reply);
+    const delivery = await deliverReply(contact.phone, result.reply, resolved.replyAsVoice);
+    sent = delivery.sent;
+    repliedByVoice = delivery.byVoice;
     if (!sent.ok) {
       console.error(`[engine] WhatsApp send failed for ${contact.phone}: ${sent.error}`);
     }
@@ -114,7 +131,7 @@ export async function handleInboundMessage(inbound: InboundMessage): Promise<Inb
       conversation_id: conversation.id,
       direction: "outbound",
       sender: "ai",
-      content: result.reply,
+      content: repliedByVoice ? `🎤 ${result.reply}` : result.reply,
       intent: result.intent,
       wasender_id: sent.id ?? null,
     });
@@ -217,6 +234,112 @@ async function notifyAdmin(
     error: sent.error ?? null,
     sent_at: sent.ok ? new Date().toISOString() : null,
   });
+}
+
+// ─────────────────────────── media ───────────────────────────
+
+interface ResolvedInbound {
+  /** Text the agent reasons about + stores (with a small kind marker). */
+  text: string;
+  /** Answer with a voice note (true only for understood voice notes). */
+  replyAsVoice: boolean;
+}
+
+/**
+ * Normalise any inbound message kind into agent-usable text. Voice notes are
+ * transcribed, images are described; other media are acknowledged with a clear
+ * marker so the agent and Mohamed both know what the client sent.
+ */
+async function resolveInboundContent(inbound: InboundMessage): Promise<ResolvedInbound> {
+  const caption = inbound.media?.caption?.trim() || inbound.text.trim();
+
+  switch (inbound.kind) {
+    case "text":
+      return { text: inbound.text.trim(), replyAsVoice: false };
+
+    case "audio": {
+      const url = await getDecryptedMediaUrl(inbound);
+      const transcript = url ? await transcribeAudio(url, inbound.media?.mimetype) : null;
+      if (transcript) return { text: `🎤 ${transcript}`, replyAsVoice: true };
+      // Couldn't understand the voice note — answer in text and ask to repeat.
+      return {
+        text: "🎤 (message vocal reçu — transcription indisponible)",
+        replyAsVoice: false,
+      };
+    }
+
+    case "image": {
+      const url = await getDecryptedMediaUrl(inbound);
+      const description = url ? await describeImage(url, caption) : null;
+      const parts = ["🖼️ Image reçue."];
+      if (caption) parts.push(`Légende : ${caption}.`);
+      if (description) parts.push(`Contenu : ${description}`);
+      return { text: parts.join(" "), replyAsVoice: false };
+    }
+
+    case "video":
+      return {
+        text: `🎬 Vidéo reçue.${caption ? ` Légende : ${caption}` : ""}`,
+        replyAsVoice: false,
+      };
+
+    case "document":
+      return {
+        text: `📎 Document reçu${inbound.media?.fileName ? ` : ${inbound.media.fileName}` : ""}.${
+          caption ? ` ${caption}` : ""
+        }`,
+        replyAsVoice: false,
+      };
+
+    case "location":
+      return { text: "📍 Localisation partagée par le client.", replyAsVoice: false };
+
+    case "contact":
+      return { text: "👤 Carte de contact partagée par le client.", replyAsVoice: false };
+
+    case "sticker":
+      return { text: caption || "😄 (sticker reçu)", replyAsVoice: false };
+
+    default:
+      return { text: caption || "", replyAsVoice: false };
+  }
+}
+
+/** Decrypt an inbound media message to a temporary public URL (or null). */
+async function getDecryptedMediaUrl(inbound: InboundMessage): Promise<string | null> {
+  if (!inbound.media?.url || !inbound.rawMessage) return null;
+  const res = await decryptMediaFile(inbound.rawMessage);
+  if (!res.ok || !res.url) {
+    console.error(`[engine] media decrypt failed: ${res.error}`);
+    return null;
+  }
+  return res.url;
+}
+
+/**
+ * Deliver the agent reply. When the client used voice we synthesize a voice
+ * note (TTS → upload → send); any failure falls back to a plain text message
+ * so the prospect always gets an answer.
+ */
+async function deliverReply(
+  phone: string,
+  reply: string,
+  asVoice: boolean,
+): Promise<{ sent: SendResult; byVoice: boolean }> {
+  if (asVoice) {
+    const speech = await synthesizeSpeech(reply);
+    if (speech) {
+      const uploaded = await uploadMediaToWasender(speech.bytes, speech.mimetype);
+      if (uploaded.ok && uploaded.url) {
+        const sent = await sendWhatsAppAudio(phone, uploaded.url);
+        if (sent.ok) return { sent, byVoice: true };
+        console.error(`[engine] voice send failed, falling back to text: ${sent.error}`);
+      } else {
+        console.error(`[engine] voice upload failed, falling back to text: ${uploaded.error}`);
+      }
+    }
+  }
+  return { sent: await sendWhatsAppText(phone, reply), byVoice: false };
 }
 
 // ─────────────────────────── helpers ───────────────────────────
