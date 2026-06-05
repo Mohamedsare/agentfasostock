@@ -3,13 +3,14 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Bot, Loader2, Plus, QrCode, RefreshCw, Trash2, CheckCircle2, Circle } from "lucide-react";
+import { Bot, Loader2, Plus, QrCode, RefreshCw, Trash2, CheckCircle2, Circle, PhoneForwarded } from "lucide-react";
 import {
   createAgent,
   deleteAgent,
   connectAgentWhatsApp,
   refreshAgentConnection,
   setActiveAgent,
+  saveAgentAdminWhatsapp,
 } from "@/lib/actions/agents";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,8 @@ export interface ManagedAgent {
   phone_number: string | null;
   connection_status: string;
   wasender_session_id: string | null;
+  /** WhatsApp number of the human who takes over qualified leads (E.164). */
+  admin_whatsapp: string | null;
 }
 
 function statusBadge(status: string) {
@@ -50,6 +53,9 @@ export function AgentsManager({
   const [qr, setQr] = useState<string | null>(null);
   const [qrAgent, setQrAgent] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
+  // Relay (takeover) number editing — per agent, multi-tenant.
+  const [relayAgent, setRelayAgent] = useState<string | null>(null);
+  const [relayPhone, setRelayPhone] = useState("");
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, success?: string) {
     start(async () => {
@@ -98,6 +104,31 @@ export function AgentsManager({
         toast.message("Pas encore connecté — scannez le QR affiché puis revérifiez.");
       }
       router.refresh();
+    });
+  }
+
+  function openRelay(agentId: string, current: string | null) {
+    setRelayAgent(agentId);
+    setRelayPhone(current ?? "");
+  }
+
+  function saveRelay(agentId: string) {
+    const value = relayPhone.trim();
+    // Allow clearing (falls back to the platform default), else require E.164-ish.
+    if (value && !/^\+?\d{8,15}$/.test(value)) {
+      toast.error("Numéro invalide. Format attendu : +226XXXXXXXX.");
+      return;
+    }
+    const normalized = value ? (value.startsWith("+") ? value : `+${value}`) : "";
+    start(async () => {
+      const r = await saveAgentAdminWhatsapp(agentId, normalized);
+      if (r.ok) {
+        toast.success(normalized ? "Numéro de relais enregistré." : "Numéro de relais effacé.");
+        setRelayAgent(null);
+        router.refresh();
+      } else {
+        toast.error(r.error ?? "Enregistrement échoué.");
+      }
     });
   }
 
@@ -153,6 +184,14 @@ export function AgentsManager({
                     {statusBadge(a.connection_status)}
                     {a.phone_number && <span>· {a.phone_number}</span>}
                   </div>
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <PhoneForwarded className="size-3 shrink-0" />
+                    {a.admin_whatsapp ? (
+                      <span>Relais : {a.admin_whatsapp}</span>
+                    ) : (
+                      <span className="italic">Numéro de relais non défini</span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -166,6 +205,11 @@ export function AgentsManager({
                 <Button variant="outline" size="sm" disabled={pending} onClick={() => openConnect(a.id)}>
                   <QrCode className="size-4" />
                   {a.connection_status === "connected" ? "Reconnecter" : "Connecter WhatsApp"}
+                </Button>
+                <Button variant="outline" size="sm" disabled={pending}
+                  onClick={() => openRelay(a.id, a.admin_whatsapp)}>
+                  <PhoneForwarded className="size-4" />
+                  Relais
                 </Button>
                 <Button variant="ghost" size="sm" disabled={pending}
                   onClick={() => {
@@ -226,6 +270,38 @@ export function AgentsManager({
               </Button>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Relay number dialog: who takes over a qualified lead (per tenant/agent) */}
+      <Dialog open={relayAgent !== null} onOpenChange={(o) => { if (!o) setRelayAgent(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Numéro de relais (prise en charge)</DialogTitle>
+            <DialogDescription>
+              Quand un prospect est qualifié ou chaud, l&apos;agent IA se met en retrait et envoie
+              une alerte WhatsApp à ce numéro pour qu&apos;une personne prenne le relais. Laissez
+              vide pour utiliser le numéro par défaut de la plateforme.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <div className="space-y-1.5">
+              <label htmlFor="relayPhone" className="text-sm font-medium">
+                Numéro WhatsApp de la personne
+              </label>
+              <Input
+                id="relayPhone"
+                placeholder="+226 70 00 00 00"
+                value={relayPhone}
+                onChange={(e) => setRelayPhone(e.target.value)}
+              />
+            </div>
+            <Button className="w-full" disabled={pending}
+              onClick={() => relayAgent && saveRelay(relayAgent)}>
+              {pending ? <Loader2 className="size-4 animate-spin" /> : <PhoneForwarded className="size-4" />}
+              Enregistrer
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

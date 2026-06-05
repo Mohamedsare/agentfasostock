@@ -38,6 +38,7 @@ export default async function AgentsPage() {
             phone_number: a.phone_number,
             connection_status: a.connection_status,
             wasender_session_id: a.wasender_session_id,
+            admin_whatsapp: a.admin_whatsapp,
           }))}
           activeId={activeId}
         />
