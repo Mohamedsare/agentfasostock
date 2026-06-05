@@ -37,6 +37,12 @@ export default async function LoginPage({
 
       {/* Form panel */}
       <div className="relative flex flex-col items-center justify-center px-6 py-12">
+        <Link
+          href="/"
+          className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-border bg-card/70 px-3 py-1.5 text-sm font-medium text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" /> Accueil
+        </Link>
         <div className="absolute right-4 top-4 flex items-center gap-2">
           <ThemeToggle />
         </div>
@@ -59,13 +65,6 @@ export default async function LoginPage({
               Créer un compte
             </Link>
           </p>
-
-          <Link
-            href="/"
-            className="mt-6 inline-flex w-full items-center justify-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="size-4" /> Retour à l'accueil
-          </Link>
         </div>
       </div>
     </div>
