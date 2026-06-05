@@ -55,13 +55,23 @@ export async function POST(req: NextRequest) {
   // webhook URL in Wasender, matching WASENDER_WEBHOOK_SECRET.
   const expected = serverEnv.wasenderWebhookSecret;
   if (expected) {
-    const provided =
-      req.headers.get("x-webhook-signature") ??
-      req.headers.get("x-wasender-signature") ??
-      req.headers.get("x-webhook-secret") ??
-      req.nextUrl.searchParams.get("secret") ??
-      "";
-    if (provided !== expected) {
+    // Wasender presents two credentials and we accept EITHER:
+    //  1. the ?secret= we appended to the registered webhook URL — we control
+    //     this, so it always matches WASENDER_WEBHOOK_SECRET; and
+    //  2. an X-Webhook-Signature header carrying the session's OWN webhook_secret
+    //     — Wasender auto-generates that per session and won't let us set it, so
+    //     it only matches when it happens to equal our global secret.
+    // Authorize if our expected secret equals ANY presented credential. Crucially,
+    // a present-but-different header must NOT override a correct ?secret= query
+    // param (the previous `header ?? query` logic 401'd every session whose
+    // auto-generated webhook_secret differed from ours).
+    const candidates = [
+      req.headers.get("x-webhook-signature"),
+      req.headers.get("x-wasender-signature"),
+      req.headers.get("x-webhook-secret"),
+      req.nextUrl.searchParams.get("secret"),
+    ];
+    if (!candidates.includes(expected)) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
   }
