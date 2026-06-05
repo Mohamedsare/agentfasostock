@@ -13,6 +13,7 @@ import {
   getSessionQr,
   getSession,
   updateSessionWebhook,
+  mapSessionStatus,
 } from "@/lib/wasender";
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/actions/conversations";
@@ -195,7 +196,8 @@ export async function refreshAgentConnection(
 
   const res = await getSession(ref);
   const data = (res.data ?? {}) as { status?: string; api_key?: string; phone_number?: string };
-  const connected = (data.status ?? "").toLowerCase().includes("connected");
+  // "disconnected" contains "connected" — use the central mapper, not a substring.
+  const connected = mapSessionStatus(data.status) === "connected";
 
   // Once connected, PUT the session so Wasender syncs the webhook to the live
   // WhatsApp connection (otherwise inbound events never fire).

@@ -1,13 +1,28 @@
 import "server-only";
 import { serverEnv } from "@/lib/env";
 import { LEAD_STATUS_META } from "@/lib/constants";
-import type { Contact, Conversation, EmailTrigger } from "@/lib/types";
+import type { AgentConnectionStatus, Contact, Conversation, EmailTrigger } from "@/lib/types";
 
 /**
  * Wasender API service (CLAUDE.md §18).
  * Handles outbound text messages with a simple retry, and normalises the
  * inbound webhook payload. Never hardcodes credentials.
  */
+
+/**
+ * Normalise a raw Wasender session status string into our connection enum.
+ * Order matters: "disconnected" *contains* "connected", so the negative cases
+ * must be tested first.
+ */
+export function mapSessionStatus(raw: string | null | undefined): AgentConnectionStatus {
+  const s = (raw ?? "").toLowerCase();
+  if (!s) return "disconnected";
+  if (/(disconnect|logout|logged_out|expired|offline|unpaired|closed)/.test(s)) return "disconnected";
+  if (/(fail|error)/.test(s)) return "error";
+  if (s.includes("connected")) return "connected";
+  if (/(connecting|scan|qr|pending|require|init|starting)/.test(s)) return "connecting";
+  return "disconnected";
+}
 
 export interface SendResult {
   ok: boolean;
