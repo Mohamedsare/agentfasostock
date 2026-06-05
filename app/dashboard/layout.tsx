@@ -1,5 +1,6 @@
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Header } from "@/components/dashboard/header";
+import { BottomNav } from "@/components/dashboard/bottom-nav";
 import { getSessionUser } from "@/lib/auth";
 import { getAgentSettings, usingMockData } from "@/lib/data";
 import { getOrgAgents, getActiveAgentId } from "@/lib/agents";
@@ -35,9 +36,13 @@ export default async function DashboardLayout({
           </div>
         )}
         <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-7xl p-4 lg:p-6">{children}</div>
+          {/* Extra bottom padding on mobile clears the fixed bottom tab bar + iOS home indicator. */}
+          <div className="mx-auto w-full max-w-7xl p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6">
+            {children}
+          </div>
         </main>
       </div>
+      <BottomNav />
     </div>
   );
 }

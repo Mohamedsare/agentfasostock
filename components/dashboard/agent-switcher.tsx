@@ -41,7 +41,7 @@ export function AgentSwitcher({
             router.refresh();
           });
         }}
-        className="h-9 appearance-none rounded-lg border border-border bg-card pl-8 pr-8 text-sm font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
+        className="h-9 max-w-34 appearance-none truncate rounded-lg border border-border bg-card pl-8 pr-8 text-sm font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring sm:max-w-none"
       >
         {agents.map((a) => (
           <option key={a.id} value={a.id}>

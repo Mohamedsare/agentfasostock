@@ -75,7 +75,7 @@ export default async function DashboardPage() {
       />
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard index={0} label="Conversations" value={stats.totalConversations} icon={MessagesSquare} tone="primary" />
         <StatCard index={1} label="Nouveaux prospects" value={stats.newProspects} icon={UserPlus} tone="info" />
         <StatCard index={2} label="Prospects chauds" value={stats.hotProspects} icon={Flame} tone="accent" />

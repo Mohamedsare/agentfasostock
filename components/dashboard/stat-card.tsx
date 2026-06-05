@@ -24,17 +24,17 @@ const TONE: Record<NonNullable<StatCardProps["tone"]>, string> = {
 export function StatCard({ label, value, icon: Icon, tone = "primary", hint, index = 0 }: StatCardProps) {
   return (
     <FadeIn delay={index * 0.05}>
-      <Card className="p-5 transition-shadow hover:shadow-md">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-muted-foreground">{label}</p>
-            <p className="text-3xl font-bold tracking-tight tabular-nums text-foreground">
+      <Card className="p-4 transition-shadow hover:shadow-md sm:p-5">
+        <div className="flex items-start justify-between gap-2 sm:gap-3">
+          <div className="min-w-0 space-y-1">
+            <p className="truncate text-xs font-medium text-muted-foreground sm:text-sm">{label}</p>
+            <p className="text-2xl font-bold tracking-tight tabular-nums text-foreground sm:text-3xl">
               {typeof value === "number" ? formatNumber(value) : value}
             </p>
             {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
           </div>
-          <span className={cn("grid size-11 place-items-center rounded-xl", TONE[tone])}>
-            <Icon className="size-5" />
+          <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl sm:size-11", TONE[tone])}>
+            <Icon className="size-4 sm:size-5" />
           </span>
         </div>
       </Card>
