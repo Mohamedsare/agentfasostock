@@ -33,7 +33,7 @@ export default function LandingPage() {
           <Logo />
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Button asChild>
+            <Button asChild size="sm" className="sm:h-10 sm:px-4 sm:text-sm">
               <Link href="/login">
                 Connexion <ArrowRight className="size-4" />
               </Link>
