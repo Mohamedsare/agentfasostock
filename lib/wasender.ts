@@ -271,11 +271,26 @@ async function accountFetch<T = Record<string, unknown>>(
   }
 }
 
-/** Create a new WhatsApp session and point its webhook at our endpoint. */
-export function createSession(name: string, webhookUrl: string): Promise<SessionApiResult> {
+/**
+ * Create a new WhatsApp session and point its webhook at our endpoint.
+ * Wasender requires name + phone_number + account_protection.
+ */
+export function createSession(
+  name: string,
+  phoneNumber: string,
+  webhookUrl: string,
+): Promise<SessionApiResult<{ id?: number | string; api_key?: string }>> {
   return accountFetch("/whatsapp-sessions", {
     method: "POST",
-    body: JSON.stringify({ name, webhook_url: webhookUrl, webhook_enabled: true }),
+    body: JSON.stringify({
+      name,
+      phone_number: phoneNumber,
+      account_protection: true,
+      log_messages: true,
+      webhook_url: webhookUrl,
+      webhook_enabled: true,
+      webhook_events: ["messages.received"],
+    }),
   });
 }
 

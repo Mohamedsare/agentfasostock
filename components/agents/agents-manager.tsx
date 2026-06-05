@@ -49,6 +49,7 @@ export function AgentsManager({
   const [name, setName] = useState("");
   const [qr, setQr] = useState<string | null>(null);
   const [qrAgent, setQrAgent] = useState<string | null>(null);
+  const [phone, setPhone] = useState("");
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, success?: string) {
     start(async () => {
@@ -63,14 +64,20 @@ export function AgentsManager({
   }
 
   function openConnect(agentId: string) {
+    setQrAgent(agentId);
+    setQr(null);
+    setPhone("");
+  }
+
+  function generateQr(agentId: string) {
     start(async () => {
-      const r = await connectAgentWhatsApp(agentId);
+      const r = await connectAgentWhatsApp(agentId, phone);
       if (!r.ok) {
         toast.error(r.error ?? "Connexion échouée.");
         return;
       }
-      setQrAgent(agentId);
       setQr(r.qr ?? null);
+      if (!r.qr) toast.message("Session créée. Cliquez sur Vérifier si le QR n'apparaît pas.");
       router.refresh();
     });
   }
@@ -173,30 +180,51 @@ export function AgentsManager({
         </div>
       )}
 
-      {/* QR dialog */}
-      <Dialog open={qrAgent !== null} onOpenChange={(o) => { if (!o) { setQrAgent(null); setQr(null); } }}>
+      {/* Connect dialog: phone number → QR → verify */}
+      <Dialog open={qrAgent !== null} onOpenChange={(o) => { if (!o) { setQrAgent(null); setQr(null); setPhone(""); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Connecter le numéro WhatsApp</DialogTitle>
             <DialogDescription>
-              Ouvrez WhatsApp → Appareils connectés → Connecter un appareil, puis scannez ce QR code.
+              {qr
+                ? "Ouvrez WhatsApp → Appareils connectés → Connecter un appareil, puis scannez ce QR code."
+                : "Entrez le numéro WhatsApp à connecter pour cet agent."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col items-center gap-4 py-2">
-            {qrSrc ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={qrSrc} alt="QR code WhatsApp" className="size-56 rounded-lg border border-border bg-white p-2" />
-            ) : (
-              <div className="flex size-56 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-                QR indisponible — cliquez sur Vérifier.
+          {!qr ? (
+            <div className="flex flex-col gap-3 py-2">
+              <div className="space-y-1.5">
+                <label htmlFor="connectPhone" className="text-sm font-medium">Numéro WhatsApp</label>
+                <Input
+                  id="connectPhone"
+                  placeholder="+226 70 00 00 00"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
               </div>
-            )}
-            <Button className="w-full" disabled={pending} onClick={() => qrAgent && checkStatus(qrAgent)}>
-              {pending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              J&apos;ai scanné — Vérifier la connexion
-            </Button>
-          </div>
+              <Button className="w-full" disabled={pending || !phone.trim()}
+                onClick={() => qrAgent && generateQr(qrAgent)}>
+                {pending ? <Loader2 className="size-4 animate-spin" /> : <QrCode className="size-4" />}
+                Générer le QR code
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-2">
+              {qrSrc ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={qrSrc} alt="QR code WhatsApp" className="size-56 rounded-lg border border-border bg-white p-2" />
+              ) : (
+                <div className="flex size-56 items-center justify-center rounded-lg border border-dashed border-border p-3 text-center text-sm text-muted-foreground">
+                  QR en cours de génération — cliquez sur Vérifier dans quelques secondes.
+                </div>
+              )}
+              <Button className="w-full" disabled={pending} onClick={() => qrAgent && checkStatus(qrAgent)}>
+                {pending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                J&apos;ai scanné — Vérifier la connexion
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

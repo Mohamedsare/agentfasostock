@@ -97,8 +97,17 @@ export interface ConnectResult extends ActionResult {
  * Creates the session under the platform account, points its webhook at us,
  * stores the session id + per-session key, and marks the agent "connecting".
  */
-export async function connectAgentWhatsApp(agentId: string): Promise<ConnectResult> {
+export async function connectAgentWhatsApp(
+  agentId: string,
+  phoneNumber: string,
+): Promise<ConnectResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
+  const phone = phoneNumber.trim();
+  if (!/^\+?\d{8,15}$/.test(phone)) {
+    return { ok: false, error: "Numéro invalide. Format attendu : +226XXXXXXXX." };
+  }
+  const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+
   const supabase = await createClient();
   const { data: agent } = await supabase
     .from("agents")
@@ -117,7 +126,7 @@ export async function connectAgentWhatsApp(agentId: string): Promise<ConnectResu
   let ref = (agent as { wasender_session_ref?: string | null }).wasender_session_ref ?? null;
   let apiKey = (agent as { wasender_session_id?: string | null }).wasender_session_id ?? null;
   if (!ref) {
-    const created = await createSession((agent as { name: string }).name, webhookUrl);
+    const created = await createSession((agent as { name: string }).name, e164, webhookUrl);
     if (!created.ok || !created.data) {
       return { ok: false, error: created.error ?? "Création de session échouée." };
     }
@@ -137,6 +146,7 @@ export async function connectAgentWhatsApp(agentId: string): Promise<ConnectResu
     .from("agents")
     .update({
       wasender_session_ref: ref,
+      phone_number: e164,
       ...(apiKey
         ? { wasender_session_id: apiKey, wasender_session_key_enc: encryptSecret(apiKey) }
         : {}),
