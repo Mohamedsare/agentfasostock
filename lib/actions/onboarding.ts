@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { encryptSecret } from "@/lib/crypto";
 import { isSupabaseConfigured } from "@/lib/env";
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
+import { sendWelcomeEmail } from "@/lib/email";
 
 export interface OnboardingState {
   error?: string;
@@ -59,6 +60,15 @@ export async function completeOnboarding(
     operating_mode: DEFAULT_AGENT_SETTINGS.operating_mode,
   });
   if (agentErr) return { error: agentErr.message };
+
+  // Welcome the new user now that their workspace is ready (best-effort).
+  try {
+    const displayName =
+      (user.user_metadata?.full_name as string | undefined) ?? user.email?.split("@")[0] ?? "";
+    if (user.email) await sendWelcomeEmail(user.email, displayName);
+  } catch (err) {
+    console.error("[onboarding] welcome email failed:", err);
+  }
 
   redirect("/dashboard/agents");
 }

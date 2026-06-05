@@ -151,6 +151,101 @@ function renderInvitationEmail(input: InvitationEmailInput): string {
   </div>`;
 }
 
+/** Welcome email sent to a new user once their workspace is ready (post-onboarding). */
+export async function sendWelcomeEmail(to: string, name: string): Promise<EmailSendResult> {
+  const subject = "🎉 Bienvenue sur AgentFS — votre espace est prêt";
+  if (!features.resend) {
+    console.warn("[email] Resend not configured — welcome email not sent.");
+    return { ok: false, subject, error: "resend_not_configured" };
+  }
+  const appUrl = serverEnv.appUrl.replace(/\/$/, "");
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: serverEnv.resendFromEmail,
+      to,
+      subject,
+      html: renderWelcomeEmail(name, `${appUrl}/dashboard`),
+    });
+    if (error) return { ok: false, subject, error: error.message };
+    return { ok: true, id: data?.id, subject };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "send error";
+    console.error("[email] welcome send failed:", message);
+    return { ok: false, subject, error: message };
+  }
+}
+
+/** Notify the platform super-admin that a new user signed up. */
+export async function sendNewUserAdminAlert(
+  userEmail: string,
+  name: string,
+): Promise<EmailSendResult> {
+  const subject = `🚀 Nouvel inscrit sur AgentFS — ${name || userEmail}`;
+  if (!features.resend) {
+    console.warn("[email] Resend not configured — new-user alert not sent.");
+    return { ok: false, subject, error: "resend_not_configured" };
+  }
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: serverEnv.resendFromEmail,
+      to: serverEnv.superAdminEmail,
+      subject,
+      html: renderNewUserAlert(userEmail, name),
+    });
+    if (error) return { ok: false, subject, error: error.message };
+    return { ok: true, id: data?.id, subject };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "send error";
+    console.error("[email] new-user alert failed:", message);
+    return { ok: false, subject, error: message };
+  }
+}
+
+function renderWelcomeEmail(name: string, dashboardUrl: string): string {
+  const first = (name || "").trim().split(/\s+/)[0] || "👋";
+  return `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f8fafc;padding:24px">
+    <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+      <div style="background:#16a34a;padding:28px 24px;color:#fff;text-align:center">
+        <div style="font-size:13px;opacity:.85;letter-spacing:.04em">AGENTFS</div>
+        <div style="font-size:22px;font-weight:800;margin-top:4px">Bienvenue, ${escapeHtml(first)} 🎉</div>
+      </div>
+      <div style="padding:26px 28px;color:#334155;font-size:15px;line-height:1.65">
+        <p style="margin:0 0 14px">Votre espace AgentFS est prêt. Votre agent WhatsApp IA peut désormais répondre, qualifier vos prospects et vous alerter quand un lead devient chaud.</p>
+        <p style="margin:0 0 22px;font-weight:600;color:#111827">Pour démarrer :</p>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+          <tr><td style="padding:6px 0;font-size:14px">1️⃣ Connectez votre numéro WhatsApp</td></tr>
+          <tr><td style="padding:6px 0;font-size:14px">2️⃣ Personnalisez votre agent (ton, message d'accueil)</td></tr>
+          <tr><td style="padding:6px 0;font-size:14px">3️⃣ Laissez l'IA qualifier vos prospects 24/7</td></tr>
+        </table>
+        <a href="${dashboardUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:13px 26px;border-radius:10px;font-weight:700;font-size:15px">Ouvrir mon tableau de bord →</a>
+      </div>
+      <div style="padding:16px 28px;border-top:1px solid #f1f5f9;color:#94a3b8;font-size:12px">
+        AgentFS — Agent WhatsApp IA. Besoin d'aide ? Répondez simplement à cet email.
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderNewUserAlert(userEmail: string, name: string): string {
+  return `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f8fafc;padding:24px">
+    <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb">
+      <div style="background:#111827;padding:20px 24px;color:#fff">
+        <div style="font-size:13px;opacity:.7">AgentFS · Super-admin</div>
+        <div style="font-size:19px;font-weight:700;margin-top:2px">🚀 Nouvel inscrit</div>
+      </div>
+      <div style="padding:20px 24px">
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="padding:6px 12px;color:#64748b;font-size:13px">Nom</td><td style="padding:6px 12px;color:#111827;font-size:14px;font-weight:600">${escapeHtml(name || "—")}</td></tr>
+          <tr><td style="padding:6px 12px;color:#64748b;font-size:13px">Email</td><td style="padding:6px 12px;color:#111827;font-size:14px;font-weight:600">${escapeHtml(userEmail)}</td></tr>
+          <tr><td style="padding:6px 12px;color:#64748b;font-size:13px">Date</td><td style="padding:6px 12px;color:#111827;font-size:14px">${new Date().toLocaleString("fr-FR")}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderLeadEmail(input: LeadEmailInput): string {
   const { contact, conversation, recentMessages = [] } = input;
   const name = contact.name?.trim() || contact.phone;

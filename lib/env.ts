@@ -110,6 +110,13 @@ export const serverEnv = {
   get adminEmail() {
     return required("ADMIN_EMAIL", process.env.ADMIN_EMAIL);
   },
+  /**
+   * Platform super-admin email (the app owner). Receives a notification on every
+   * new user signup. Distinct from the per-tenant ADMIN_EMAIL.
+   */
+  get superAdminEmail() {
+    return process.env.SUPER_ADMIN_EMAIL || "mohamedsare078@gmail.com";
+  },
   /** Phone (E.164) that receives lead alerts over WhatsApp instead of email. */
   get adminWhatsapp() {
     return process.env.ADMIN_WHATSAPP || "+212771668079";

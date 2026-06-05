@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
+import { sendNewUserAdminAlert } from "@/lib/email";
 
 export interface AuthState {
   error?: string;
@@ -49,6 +50,13 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
     options: { data: { full_name: fullName || email.split("@")[0] } },
   });
   if (error) return { error: error.message };
+
+  // Notify the platform super-admin of the new signup (best-effort, never blocks).
+  try {
+    await sendNewUserAdminAlert(email, fullName || email.split("@")[0]);
+  } catch (err) {
+    console.error("[auth] new-user admin alert failed:", err);
+  }
 
   // If email confirmation is disabled, the user is signed in immediately.
   redirect("/onboarding");
