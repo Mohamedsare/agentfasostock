@@ -40,8 +40,14 @@ correspondant et règle le **Subject** :
 | Reset Password | `reset-password.html` | `Réinitialisez votre mot de passe — AgentFS` |
 | Magic Link | `magic-link.html` | `Votre lien de connexion — AgentFS` |
 
-Variables Supabase utilisées : `{{ .ConfirmationURL }}`, `{{ .Email }}`, `{{ .SiteURL }}`,
-`{{ .Token }}`. Ne les renomme pas.
+Variables Supabase utilisées : `{{ .ConfirmationURL }}`, `{{ .TokenHash }}`, `{{ .Email }}`,
+`{{ .SiteURL }}`, `{{ .Token }}`. Ne les renomme pas.
+
+> ⚠️ Le template `confirm-signup.html` pointe vers
+> `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/onboarding`.
+> Cette route (`app/auth/confirm/route.ts`) **établit la session** après le clic, puis
+> redirige vers l'onboarding. Sans elle, le clic validerait l'email mais laisserait
+> l'utilisateur déconnecté. Garde donc le lien sous cette forme `token_hash`.
 
 ## 3. URLs de redirection (sinon les liens cassent)
 

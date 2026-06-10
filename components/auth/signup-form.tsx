@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { AlertCircle, Loader2, UserPlus } from "lucide-react";
+import { AlertCircle, Loader2, MailCheck, UserPlus } from "lucide-react";
 import { signUp, type AuthState } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,32 @@ function SubmitButton() {
 
 export function SignupForm({ demoMode }: { demoMode: boolean }) {
   const [state, formAction] = useActionState<AuthState, FormData>(signUp, {});
+
+  // Confirmation email sent — no session yet. Show a clear "check your inbox" state.
+  if (state.emailSent) {
+    return (
+      <div className="space-y-4 text-center">
+        <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-primary/10">
+          <MailCheck className="size-7 text-primary" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="text-lg font-semibold">Vérifiez votre boîte mail 📩</h2>
+          <p className="text-sm text-muted-foreground">
+            Nous avons envoyé un lien de confirmation
+            {state.email ? (
+              <>
+                {" "}à <span className="font-medium text-foreground">{state.email}</span>
+              </>
+            ) : null}
+            . Cliquez sur le lien pour activer votre compte, puis vous pourrez vous connecter.
+          </p>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Pensez à regarder dans vos spams. Le lien peut prendre une minute à arriver.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form action={formAction} className="space-y-4">

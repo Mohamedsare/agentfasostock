@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, AlertCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { LoginForm } from "@/components/auth/login-form";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -11,10 +11,11 @@ export const metadata: Metadata = { title: "Connexion" };
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ redirect?: string }>;
+  searchParams: Promise<{ redirect?: string; error?: string }>;
 }) {
-  const { redirect } = await searchParams;
+  const { redirect, error } = await searchParams;
   const redirectTo = redirect && redirect.startsWith("/") ? redirect : "/dashboard";
+  const confirmationFailed = error === "confirmation";
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
@@ -56,6 +57,13 @@ export default async function LoginPage({
             <h1 className="text-2xl font-bold tracking-tight">Connexion admin</h1>
             <p className="text-sm text-muted-foreground">Accédez à votre tableau de bord AgentFS.</p>
           </div>
+
+          {confirmationFailed && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="size-4 shrink-0" />
+              Lien de confirmation invalide ou expiré. Reconnectez-vous ou demandez un nouveau lien.
+            </div>
+          )}
 
           <LoginForm redirectTo={redirectTo} demoMode={!isSupabaseConfigured} />
 
