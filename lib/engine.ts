@@ -119,6 +119,15 @@ export async function handleInboundMessage(
     settings: ctx.agent,
     knowledge,
     previousScore: conversation.score,
+    // Long-term memory: known facts + rolling summary, so the agent never loses
+    // context past the raw-history window or restarts the discussion.
+    memory: {
+      contactName: contact.name,
+      businessType: contact.business_type,
+      city: contact.city,
+      need: contact.need,
+      summary: conversation.summary,
+    },
     openaiKey: ctx.openaiKey,
   });
 

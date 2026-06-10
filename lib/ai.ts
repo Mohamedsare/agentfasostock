@@ -1,7 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { serverEnv } from "@/lib/env";
-import { buildSystemPrompt } from "@/lib/prompt";
+import { buildSystemPrompt, type ConversationMemory } from "@/lib/prompt";
 import { clamp, scoreConversation, statusForScore, shouldNotifyAdmin } from "@/lib/scoring";
 import { agentResultSchema } from "@/lib/validations";
 import type {
@@ -18,6 +18,8 @@ export interface GenerateOptions {
   toneOverride?: AgentTone;
   promptOverride?: string;
   previousScore?: number;
+  /** Long-term memory of the prospect (known facts + rolling summary). */
+  memory?: ConversationMemory;
   /** Tenant OpenAI key; falls back to the platform key when omitted. */
   openaiKey?: string;
 }
@@ -50,6 +52,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       knowledge: options.knowledge,
       toneOverride: options.toneOverride,
       promptOverride: options.promptOverride,
+      memory: options.memory,
     });
 
     const completion = await client.chat.completions.create({
