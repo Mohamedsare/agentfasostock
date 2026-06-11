@@ -13,6 +13,7 @@ import {
 } from "@/lib/wasender";
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
 import { scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
+import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
 import type {
   AgentContext,
   AgentResult,
@@ -94,6 +95,9 @@ export async function handleInboundMessage(
     })
     .eq("id", conversation.id);
 
+  // The prospect just replied — stop any pending follow-up chain (§16).
+  await stopFollowUps(db, conversation.id, "responded");
+
   await logAudit(db, agentId, "contact", "inbound_message", conversation.id, {
     phone: contact.phone,
   });
@@ -160,6 +164,20 @@ export async function handleInboundMessage(
       intent: result.intent,
       wasender_id: sent.id ?? null,
     });
+  }
+
+  // Schedule the next relance (24h) when the conversation is still in play.
+  // Terminal/handoff statuses get no auto follow-up: a human takes over, or the
+  // lead is converted/lost. Only schedule when we actually replied.
+  if (sent.ok && !isHandoff && !isTerminalForFollowUp(result.status)) {
+    await scheduleFollowUp(db, {
+      agentId,
+      conversation: { id: conversation.id, status: result.status },
+      contact,
+      step: 1,
+    });
+  } else if (isHandoff || isTerminalForFollowUp(result.status)) {
+    await stopFollowUps(db, conversation.id, "cancelled");
   }
 
   return {

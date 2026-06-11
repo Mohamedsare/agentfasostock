@@ -3,12 +3,35 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { sendWhatsAppText } from "@/lib/wasender";
-import { resolveAgentContextForConversation, wasenderCredsOf } from "@/lib/agents";
+import {
+  resolveAgentContextForConversation,
+  wasenderCredsOf,
+  getActiveAgentId,
+} from "@/lib/agents";
+import { runDueFollowUps, type RunResult } from "@/lib/follow-ups";
 import { isSupabaseConfigured, serverEnv } from "@/lib/env";
 import type { ActionResult } from "@/lib/actions/conversations";
 
 function revalidate() {
   revalidatePath("/dashboard/follow-ups");
+}
+
+export interface RunFollowUpsResult extends ActionResult {
+  result?: RunResult;
+}
+
+/** Send every follow-up that is due now for the active agent (manual trigger). */
+export async function runFollowUpsNow(): Promise<RunFollowUpsResult> {
+  if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
+  const agentId = await getActiveAgentId();
+  if (!agentId) return { ok: false, error: "Aucun agent actif." };
+  try {
+    const result = await runDueFollowUps(agentId);
+    revalidate();
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Échec de l'exécution." };
+  }
 }
 
 /** Cancel a scheduled follow-up. */

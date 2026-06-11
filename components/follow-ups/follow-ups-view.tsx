@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Send, X, Loader2, Clock, CheckCircle2, MessageSquare } from "lucide-react";
+import { Send, X, Loader2, Clock, CheckCircle2, MessageSquare, PlayCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { toast } from "sonner";
 import { cn, getInitials, formatDateTime } from "@/lib/utils";
-import { cancelFollowUp, sendFollowUpNow } from "@/lib/actions/follow-ups";
+import { cancelFollowUp, sendFollowUpNow, runFollowUpsNow } from "@/lib/actions/follow-ups";
 import type { BadgeTone } from "@/lib/constants";
 import type { FollowUpStatus } from "@/lib/types";
 
@@ -51,8 +51,29 @@ export function FollowUpsView({ followUps }: { followUps: EnrichedFollowUp[] }) 
     });
   }
 
+  function runNow() {
+    setActiveId("__run__");
+    startTransition(async () => {
+      const res = await runFollowUpsNow();
+      setActiveId(null);
+      if (res.ok) {
+        const r = res.result;
+        toast.success(
+          r && r.due > 0
+            ? `${r.sent} relance(s) envoyée(s)${r.failed ? `, ${r.failed} échec(s)` : ""}.`
+            : "Aucune relance due pour le moment.",
+        );
+        router.refresh();
+      } else {
+        toast.error(res.error ?? "Échec.");
+      }
+    });
+  }
+
   const scheduled = followUps.filter((f) => f.status === "scheduled");
   const done = followUps.filter((f) => f.status !== "scheduled");
+
+  const runningNow = pending && activeId === "__run__";
 
   if (followUps.length === 0) {
     return (
@@ -66,6 +87,13 @@ export function FollowUpsView({ followUps }: { followUps: EnrichedFollowUp[] }) 
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button size="sm" variant="outline" onClick={runNow} disabled={pending}>
+          {runningNow ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
+          Lancer les relances dues
+        </Button>
+      </div>
+
       <Section title="À venir" icon={Clock} count={scheduled.length}>
         {scheduled.map((f) => (
           <FollowUpCard key={f.id} f={f} busy={pending && activeId === f.id}
