@@ -116,6 +116,48 @@ const NEGATIVE_RULES: CriterionRule[] = [
   },
 ];
 
+// ─────────────────── Personal message detector ───────────────────
+
+/**
+ * Patterns that are unambiguously personal/social — eating plans, family terms,
+ * personal greetings — with NO commercial intent.
+ * Run BEFORE the AI to silence the agent without spending any LLM tokens.
+ */
+const PERSONAL_PATTERNS: RegExp[] = [
+  // Food / social plans
+  /\b(viens?\s+(manger|dîner|déjeuner|souper|boire))\b/,
+  /\b(manger\s+(ce\s+soir|ce\s+midi|aujourd'hui|ensemble))\b/,
+  /\b(on\s+mange|on\s+dîne|on\s+se\s+retrouve\s+(ce\s+soir|demain|à))\b/,
+  // Direct family / intimate terms
+  /\b(maman|papa|doudou|chéri(e)?|mon\s+amour|ma\s+chérie|bébé)\b/,
+  // Personal social coordination
+  /\b(tu\s+viens\s+(ce\s+soir|demain|quand\s*\?)|tu\s+rentres\s+(quand|ce\s+soir))\b/,
+  /\b(on\s+se\s+voit\s+(ce\s+soir|demain|quand))\b/,
+  // Personal calls
+  /\b(rappelle-?\s*moi|tu\s+m['']appelles?|je\s+t['']appelle\s+(ce\s+soir|demain|plus\s+tard))\b/,
+  // Clearly personal wellbeing (short message with no other content)
+  /^\s*(comment\s+(tu\s+)?vas[\s?!]*|ça\s+va[\s?!]*|tu\s+vas\s+bien[\s?!]*)\s*$/,
+  // Personal whereabouts
+  /\b(tu\s+es\s+(où|là|à\s+la\s+maison)|t'es\s+(où|là))\b/,
+];
+
+/** Words that signal commercial intent — if present, never auto-exclude. */
+const COMMERCIAL_SIGNALS: RegExp[] = [
+  /\b(boutique|magasin|shop|stock|logiciel|application|appli|prix|tarif|abonnement|fasostock|vendre|acheter|commerce|gestion|inventaire|caisse|facture|client|produit|article)\b/,
+];
+
+/**
+ * Returns true when the message is clearly personal/social and contains
+ * no commercial signal. Used as a deterministic pre-filter in the engine,
+ * before any AI call.
+ */
+export function isPersonalMessage(text: string): boolean {
+  const t = text.toLowerCase();
+  const hasCommercial = COMMERCIAL_SIGNALS.some((p) => p.test(t));
+  if (hasCommercial) return false;
+  return PERSONAL_PATTERNS.some((p) => p.test(t));
+}
+
 export interface ScoreResult {
   score: number;
   criteria: ScoreCriterion[];

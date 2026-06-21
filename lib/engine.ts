@@ -15,7 +15,7 @@ import {
   type WasenderCreds,
 } from "@/lib/wasender";
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
-import { scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
+import { isPersonalMessage, scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
 import type {
   AgentContext,
@@ -121,6 +121,23 @@ export async function handleInboundMessage(
       status: "processed",
       conversationId: conversation.id,
       reason: "ai_disabled_or_human_mode",
+    };
+  }
+
+  // Deterministic personal-message filter — runs before any AI call so no LLM
+  // tokens are spent on family/social messages. If the text clearly matches a
+  // personal pattern (eating plans, family terms, personal coordination…) AND
+  // contains no commercial signal, mark the conversation exclu and stay silent.
+  if (isPersonalMessage(resolved.text)) {
+    await db
+      .from("conversations")
+      .update({ status: "exclu", mode: "human", ai_enabled: false })
+      .eq("id", conversation.id);
+    await stopFollowUps(db, conversation.id, "cancelled");
+    return {
+      status: "processed",
+      conversationId: conversation.id,
+      reason: "contact_personnel_detecte",
     };
   }
 
