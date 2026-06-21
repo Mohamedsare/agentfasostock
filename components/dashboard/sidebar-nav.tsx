@@ -19,7 +19,7 @@ export function SidebarNav({
     href === "/dashboard" ? pathname === href : pathname.startsWith(href);
 
   return (
-    <nav className="flex flex-col gap-6 px-2 py-4">
+    <nav className={cn("flex flex-col py-4", collapsed ? "gap-2 px-1" : "gap-6 px-2")}>
       {NAV_GROUPS.map((group) => (
         <div key={group.key} className="flex flex-col gap-0.5">
           {!collapsed && (
@@ -27,7 +27,6 @@ export function SidebarNav({
               {group.label}
             </span>
           )}
-          {collapsed && <div className="pb-1" />}
           {NAV_ITEMS.filter((i) => i.group === group.key).map((item) => {
             const active = isActive(item.href);
             return (
@@ -37,8 +36,10 @@ export function SidebarNav({
                 onClick={onNavigate}
                 title={collapsed ? item.label : undefined}
                 className={cn(
-                  "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200",
-                  collapsed ? "justify-center px-2" : "",
+                  "group relative flex items-center rounded-lg text-sm font-medium transition-all duration-200",
+                  collapsed
+                    ? "w-full justify-center p-2"
+                    : "gap-3 px-3 py-2",
                   active
                     ? "bg-sidebar-accent/15 text-white"
                     : "text-sidebar-foreground/80 hover:bg-white/5 hover:text-white",
@@ -49,12 +50,12 @@ export function SidebarNav({
                 )}
                 <span
                   className={cn(
-                    "flex shrink-0 items-center justify-center rounded-md p-1 transition-all",
+                    "flex shrink-0 items-center justify-center transition-all",
                     active ? "opacity-100" : "opacity-80 group-hover:opacity-100",
                   )}
                   style={{ color: item.color }}
                 >
-                  <item.icon className="size-5" />
+                  <item.icon className={cn("transition-all", collapsed ? "size-8" : "size-5")} />
                 </span>
                 {!collapsed && (
                   <span className="truncate">{item.label}</span>
