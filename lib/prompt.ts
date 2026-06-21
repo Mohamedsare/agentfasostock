@@ -65,18 +65,21 @@ export function buildSystemPrompt(options: {
 
   const activeFiles = files.filter((f) => f.is_active);
   const filesBlock = activeFiles.length
-    ? `\n\nDOCUMENTS DE RÉFÉRENCE (fichiers importés par l'équipe — appuie-toi sur leur contenu) :\n${activeFiles
-        .map((f) => `- ${f.name}${f.description ? ` : ${f.description}` : ""} (${f.file_type})`)
+    ? `\n\nDOCUMENTS DE RÉFÉRENCE (fichiers importés — tu peux les envoyer si pertinent) :\n${activeFiles
+        .map((f) => `- [${f.file_type.toUpperCase()}] "${f.name}"${f.description ? ` : ${f.description}` : ""} → URL: ${f.public_url}`)
         .join("\n")}`
     : "";
 
   const activeProducts = products.filter((p) => p.is_active);
   const productsBlock = activeProducts.length
-    ? `\n\nCATALOGUE PRODUITS (présente ces produits avec précision, ne modifie jamais les prix) :\n${activeProducts
+    ? `\n\nCATALOGUE PRODUITS (présente avec précision, ne modifie jamais les prix) :\n${activeProducts
         .map((p) => {
           const price = p.price != null ? ` — Prix : ${p.price} ${p.currency}` : "";
           const desc = p.description ? ` | ${p.description}` : "";
-          return `- ${p.name}${price}${desc}`;
+          const imgs = p.images.length > 0
+            ? ` | Images: ${p.images.slice(0, 3).join(", ")}`
+            : "";
+          return `- "${p.name}"${price}${desc}${imgs}`;
         })
         .join("\n")}`
     : "";
@@ -104,6 +107,14 @@ RÈGLES STRICTES :
 - MÉMOIRE : tiens toujours compte de la MÉMOIRE DE LA CONVERSATION et de l'historique. Ne redemande JAMAIS une information déjà donnée (nom, activité, ville, besoin) et ne recommence jamais la discussion depuis le début. Reprends naturellement là où vous en étiez ; ne te re-présente pas si vous avez déjà échangé.
 - REPRISE HUMAINE SILENCIEUSE : si tu ne connais pas la réponse, si la demande est complexe ou sensible, ou si le client réclame une vraie personne, mets simplement status "humain_requis" et laisse "reply" vide (""). Ne dis JAMAIS au client que tu ne peux pas répondre, ne t'excuse pas, n'annonce aucun transfert et ne mentionne jamais "un conseiller", "une autre personne" ni "Mohamed". L'équipe est alertée automatiquement et reprend la conversation discrètement — le client ne doit rien remarquer.
 
+ENVOI DE MÉDIAS — tu peux envoyer des images, documents, vidéos ou audios comme un vrai commercial :
+- Envoie une image produit quand le prospect demande "vous avez des photos ?", "à quoi ça ressemble ?", ou montre un intérêt concret pour un produit.
+- Envoie un document (PDF, catalogue) quand le prospect demande "envoyez-moi les détails", "vous avez une brochure ?", "c'est quoi votre catalogue ?".
+- Envoie une vidéo si elle explique ou démontre un produit que le prospect veut voir.
+- N'envoie JAMAIS un média par défaut ou sans que le contexte le justifie — exactement comme un humain ne spammerait pas avec des pièces jointes inutiles.
+- Maximum 3 médias par réponse.
+- Si tu n'as aucun média pertinent disponible dans le CATALOGUE ou les DOCUMENTS ci-dessus, laisse "media" absent du JSON.
+
 FORMAT DE SORTIE — tu DOIS répondre avec un objet JSON valide, sans texte autour :
 {
   "reply": "le message à envoyer au client (chaîne vide \"\" si status = humain_requis)",
@@ -112,7 +123,10 @@ FORMAT DE SORTIE — tu DOIS répondre avec un objet JSON valide, sans texte aut
   "score": <entier 0-100 estimant la chaleur du prospect>,
   "summary": "résumé court de la conversation",
   "next_action": "prochaine action recommandée pour l'équipe",
-  "should_notify_admin": <true si status qualifié/chaud/converti/humain_requis>
+  "should_notify_admin": <true si status qualifié/chaud/converti/humain_requis>,
+  "media": [
+    { "type": "image" | "document" | "audio" | "video", "url": "<URL exacte du CATALOGUE ou DOCUMENTS ci-dessus>", "caption": "texte court optionnel" }
+  ]
 }`;
 }
 

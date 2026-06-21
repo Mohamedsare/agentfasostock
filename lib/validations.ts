@@ -16,6 +16,12 @@ export const leadStatusSchema = z.enum([
 
 export const intentSchema = z.enum(["support", "prospection", "pricing", "demo", "other"]);
 
+const mediaAttachmentSchema = z.object({
+  type: z.enum(["image", "document", "audio", "video"]),
+  url: z.string().url(),
+  caption: z.string().optional(),
+});
+
 /** Structured AI output (CLAUDE.md §25). */
 export const agentResultSchema = z.object({
   reply: z.string().min(1),
@@ -25,6 +31,7 @@ export const agentResultSchema = z.object({
   summary: z.string().default(""),
   next_action: z.string().default(""),
   should_notify_admin: z.boolean().default(false),
+  media: z.array(mediaAttachmentSchema).max(3).optional(),
 });
 
 /** Body for POST /api/agent/respond and /api/labs/simulate. */

@@ -340,6 +340,16 @@ export interface ScoreCriterion {
   points: number;
 }
 
+/** A media attachment the agent decides to send alongside its text reply. */
+export interface AgentMediaAttachment {
+  /** Type of media — drives which Wasender send function is called. */
+  type: "image" | "document" | "audio" | "video";
+  /** Publicly accessible URL (Supabase Storage CDN or any public URL). */
+  url: string;
+  /** Optional caption shown under the media, or file name for documents. */
+  caption?: string;
+}
+
 /** Structured response the AI must always return (see CLAUDE.md §25). */
 export interface AgentResult {
   reply: string;
@@ -349,6 +359,8 @@ export interface AgentResult {
   summary: string;
   next_action: string;
   should_notify_admin: boolean;
+  /** Media the agent has decided to send alongside the text reply. Max 3. */
+  media?: AgentMediaAttachment[];
 }
 
 /** Conversation joined with its contact — convenient for list/detail views. */

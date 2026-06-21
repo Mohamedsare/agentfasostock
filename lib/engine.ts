@@ -4,6 +4,9 @@ import { generateAgentResult } from "@/lib/ai";
 import {
   sendWhatsAppText,
   sendWhatsAppAudio,
+  sendWhatsAppImage,
+  sendWhatsAppDocument,
+  sendWhatsAppVideo,
   sendLeadWhatsApp,
   uploadMediaToWasender,
   decryptMediaFile,
@@ -172,6 +175,38 @@ export async function handleInboundMessage(
       intent: result.intent,
       wasender_id: sent.id ?? null,
     });
+
+    // Send media attachments decided by the AI (images, documents, videos…).
+    // Each is sent sequentially with a short gap so WhatsApp orders them correctly.
+    if (result.media?.length) {
+      const creds = credsOf(ctx);
+      for (const attachment of result.media.slice(0, 3)) {
+        await new Promise((r) => setTimeout(r, 300));
+        let mediaSent: SendResult = { ok: false, error: "unknown_type" };
+        if (attachment.type === "image") {
+          mediaSent = await sendWhatsAppImage(contact.phone, attachment.url, creds, attachment.caption);
+        } else if (attachment.type === "document") {
+          mediaSent = await sendWhatsAppDocument(contact.phone, attachment.url, creds, attachment.caption, attachment.caption);
+        } else if (attachment.type === "video") {
+          mediaSent = await sendWhatsAppVideo(contact.phone, attachment.url, creds, attachment.caption);
+        } else if (attachment.type === "audio") {
+          mediaSent = await sendWhatsAppAudio(contact.phone, attachment.url, creds);
+        }
+        if (mediaSent.ok) {
+          await db.from("messages").insert({
+            agent_id: agentId,
+            conversation_id: conversation.id,
+            direction: "outbound",
+            sender: "ai",
+            content: `[${attachment.type}] ${attachment.caption ?? attachment.url}`,
+            intent: result.intent,
+            wasender_id: mediaSent.id ?? null,
+          });
+        } else {
+          console.error(`[engine] media send failed (${attachment.type}): ${mediaSent.error}`);
+        }
+      }
+    }
   }
 
   // Schedule the next relance (24h) when the conversation is still in play.

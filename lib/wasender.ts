@@ -192,6 +192,32 @@ export async function sendWhatsAppImage(
   return postSendMessage({ to: toE164(to), imageUrl, ...(caption ? { text: caption } : {}) }, creds);
 }
 
+/** Send a WhatsApp document (PDF, Word, Excel…) from a public URL. */
+export async function sendWhatsAppDocument(
+  to: string,
+  documentUrl: string,
+  creds: WasenderCreds,
+  fileName?: string,
+  caption?: string,
+): Promise<SendResult> {
+  return postSendMessage({
+    to: toE164(to),
+    documentUrl,
+    ...(fileName ? { fileName } : {}),
+    ...(caption ? { text: caption } : {}),
+  }, creds);
+}
+
+/** Send a WhatsApp video from a public URL, with an optional caption. */
+export async function sendWhatsAppVideo(
+  to: string,
+  videoUrl: string,
+  creds: WasenderCreds,
+  caption?: string,
+): Promise<SendResult> {
+  return postSendMessage({ to: toE164(to), videoUrl, ...(caption ? { text: caption } : {}) }, creds);
+}
+
 /**
  * Upload raw media bytes to Wasender and get back a public URL (valid ~24h)
  * usable as audioUrl/imageUrl on a subsequent send. Body is the raw binary.
