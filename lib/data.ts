@@ -18,8 +18,10 @@ import type {
   DashboardStats,
   FollowUp,
   KnowledgeBaseEntry,
+  KnowledgeFile,
   Message,
   Note,
+  Product,
 } from "@/lib/types";
 
 /** Default agent settings (used until a row exists in Supabase). */
@@ -119,6 +121,32 @@ export async function getKnowledge(): Promise<KnowledgeBaseEntry[]> {
     .eq("agent_id", agentId)
     .order("category", { ascending: true });
   return (data as unknown as KnowledgeBaseEntry[]) ?? [];
+}
+
+export async function getKnowledgeFiles(): Promise<KnowledgeFile[]> {
+  if (usingMockData) return [];
+  const agentId = await getActiveAgentId();
+  if (!agentId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("knowledge_files")
+    .select("*")
+    .eq("agent_id", agentId)
+    .order("created_at", { ascending: false });
+  return (data as unknown as KnowledgeFile[]) ?? [];
+}
+
+export async function getProducts(): Promise<Product[]> {
+  if (usingMockData) return [];
+  const agentId = await getActiveAgentId();
+  if (!agentId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("products")
+    .select("*")
+    .eq("agent_id", agentId)
+    .order("created_at", { ascending: false });
+  return (data as unknown as Product[]) ?? [];
 }
 
 export async function getFollowUps(): Promise<FollowUp[]> {

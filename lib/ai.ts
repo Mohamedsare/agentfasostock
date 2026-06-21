@@ -9,12 +9,16 @@ import type {
   AgentSettings,
   AgentTone,
   KnowledgeBaseEntry,
+  KnowledgeFile,
+  Product,
 } from "@/lib/types";
 
 export interface GenerateOptions {
   messages: { role: "user" | "assistant"; content: string }[];
   settings?: Partial<AgentSettings>;
   knowledge?: KnowledgeBaseEntry[];
+  files?: KnowledgeFile[];
+  products?: Product[];
   toneOverride?: AgentTone;
   promptOverride?: string;
   previousScore?: number;
@@ -50,6 +54,8 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     const systemPrompt = buildSystemPrompt({
       settings: options.settings,
       knowledge: options.knowledge,
+      files: options.files,
+      products: options.products,
       toneOverride: options.toneOverride,
       promptOverride: options.promptOverride,
       memory: options.memory,

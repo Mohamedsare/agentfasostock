@@ -3,6 +3,8 @@ import type {
   AgentSettings,
   AgentTone,
   KnowledgeBaseEntry,
+  KnowledgeFile,
+  Product,
 } from "@/lib/types";
 
 const TONE_GUIDANCE: Record<AgentTone, string> = {
@@ -30,6 +32,8 @@ export interface ConversationMemory {
 export function buildSystemPrompt(options: {
   settings?: Partial<AgentSettings>;
   knowledge?: KnowledgeBaseEntry[];
+  files?: KnowledgeFile[];
+  products?: Product[];
   toneOverride?: AgentTone;
   promptOverride?: string;
   memory?: ConversationMemory;
@@ -37,6 +41,8 @@ export function buildSystemPrompt(options: {
   const {
     settings = {},
     knowledge = [],
+    files = [],
+    products = [],
     toneOverride,
     promptOverride,
     memory,
@@ -57,6 +63,24 @@ export function buildSystemPrompt(options: {
         .join("\n")}`
     : "";
 
+  const activeFiles = files.filter((f) => f.is_active);
+  const filesBlock = activeFiles.length
+    ? `\n\nDOCUMENTS DE RÉFÉRENCE (fichiers importés par l'équipe — appuie-toi sur leur contenu) :\n${activeFiles
+        .map((f) => `- ${f.name}${f.description ? ` : ${f.description}` : ""} (${f.file_type})`)
+        .join("\n")}`
+    : "";
+
+  const activeProducts = products.filter((p) => p.is_active);
+  const productsBlock = activeProducts.length
+    ? `\n\nCATALOGUE PRODUITS (présente ces produits avec précision, ne modifie jamais les prix) :\n${activeProducts
+        .map((p) => {
+          const price = p.price != null ? ` — Prix : ${p.price} ${p.currency}` : "";
+          const desc = p.description ? ` | ${p.description}` : "";
+          return `- ${p.name}${price}${desc}`;
+        })
+        .join("\n")}`
+    : "";
+
   const memoryBlock = buildMemoryBlock(memory);
 
   const modeBlock =
@@ -68,7 +92,7 @@ export function buildSystemPrompt(options: {
 
   return `${base}
 
-${TONE_GUIDANCE[tone]}${modeBlock}${memoryBlock}${knowledgeBlock}
+${TONE_GUIDANCE[tone]}${modeBlock}${memoryBlock}${knowledgeBlock}${filesBlock}${productsBlock}
 
 RÈGLES STRICTES :
 - Réponds uniquement en français, sauf si le client écrit dans une autre langue.

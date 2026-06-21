@@ -141,6 +141,35 @@ export interface KnowledgeBaseEntry {
   updated_at: string;
 }
 
+export type KnowledgeFileType = "pdf" | "image" | "audio" | "word" | "excel" | "video" | "other";
+
+export interface KnowledgeFile {
+  id: string;
+  agent_id: string;
+  name: string;
+  description: string | null;
+  file_type: KnowledgeFileType;
+  mime_type: string;
+  storage_path: string;
+  public_url: string;
+  file_size_bytes: number | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Product {
+  id: string;
+  agent_id: string;
+  name: string;
+  description: string | null;
+  price: number | null;
+  currency: string;
+  images: string[];
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AgentSettings {
   id: string;
   agent_name: string;

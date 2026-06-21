@@ -21,8 +21,10 @@ import type {
   Conversation,
   EmailTrigger,
   KnowledgeBaseEntry,
+  KnowledgeFile,
   LeadStatus,
   Message,
+  Product,
 } from "@/lib/types";
 
 type Ctx = AgentContext;
@@ -116,12 +118,18 @@ export async function handleInboundMessage(
 
   // Build context from recent history (oldest → newest).
   const history = await getRecentHistory(db, conversation.id);
-  const knowledge = await getActiveKnowledge(db, agentId);
+  const [knowledge, files, products] = await Promise.all([
+    getActiveKnowledge(db, agentId),
+    getActiveKnowledgeFiles(db, agentId),
+    getActiveProducts(db, agentId),
+  ]);
 
   const result = await generateAgentResult({
     messages: history,
     settings: ctx.agent,
     knowledge,
+    files,
+    products,
     previousScore: conversation.score,
     // Long-term memory: known facts + rolling summary, so the agent never loses
     // context past the raw-history window or restarts the discussion.
@@ -529,6 +537,24 @@ async function getActiveKnowledge(db: Db, agentId: string): Promise<KnowledgeBas
     .eq("agent_id", agentId)
     .eq("is_active", true);
   return (data as KnowledgeBaseEntry[]) ?? [];
+}
+
+async function getActiveKnowledgeFiles(db: Db, agentId: string): Promise<KnowledgeFile[]> {
+  const { data } = await db
+    .from("knowledge_files")
+    .select("*")
+    .eq("agent_id", agentId)
+    .eq("is_active", true);
+  return (data as KnowledgeFile[]) ?? [];
+}
+
+async function getActiveProducts(db: Db, agentId: string): Promise<Product[]> {
+  const { data } = await db
+    .from("products")
+    .select("*")
+    .eq("agent_id", agentId)
+    .eq("is_active", true);
+  return (data as Product[]) ?? [];
 }
 
 /**
