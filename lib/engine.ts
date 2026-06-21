@@ -16,6 +16,7 @@ import {
 } from "@/lib/wasender";
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
 import { isPersonalMessage, scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
+import { classifyProspect } from "@/lib/classifier";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
 import type {
   AgentContext,
@@ -141,8 +142,39 @@ export async function handleInboundMessage(
     };
   }
 
-  // Build context from recent history (oldest → newest).
+  // Fetch message history first (lightweight) — needed both to detect first
+  // messages and later to build the AI context.
   const history = await getRecentHistory(db, conversation.id);
+
+  // ── LLM prospect classifier ──────────────────────────────────────────────
+  // Runs only on the very first message of a new contact (history.length === 1
+  // means only the message we just saved exists). Uses gpt-4o-mini (~$0.000025
+  // per call) so the cost is negligible. If the contact is not a prospect the
+  // conversation is marked exclu and we return silently — no expensive AI call,
+  // no reply, no follow-ups. Fails open: any classifier error lets the message
+  // through so real prospects are never dropped by accident.
+  if (history.length === 1) {
+    const classification = await classifyProspect(resolved.text, ctx.openaiKey);
+    if (!classification.isProspect) {
+      await db
+        .from("conversations")
+        .update({ status: "exclu", mode: "human", ai_enabled: false })
+        .eq("id", conversation.id);
+      await stopFollowUps(db, conversation.id, "cancelled");
+      await logAudit(db, agentId, "classifier", "contact_exclu_auto", conversation.id, {
+        reason: classification.reason,
+        preview: resolved.text.slice(0, 100),
+      });
+      return {
+        status: "processed",
+        conversationId: conversation.id,
+        reason: `contact_personnel: ${classification.reason}`,
+      };
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Only fetch knowledge/products once we know we'll generate a response.
   const [knowledge, files, products] = await Promise.all([
     getActiveKnowledge(db, agentId),
     getActiveKnowledgeFiles(db, agentId),
