@@ -74,9 +74,9 @@ export function AgentsManager({
     });
   }
 
-  function openConnect(agentId: string) {
+  function openConnect(agentId: string, currentPhone?: string | null) {
     setConnectAgent(agentId);
-    setPhone("");
+    setPhone(currentPhone ?? "");
     setQr(null);
   }
 
@@ -198,7 +198,7 @@ export function AgentsManager({
                   <Settings2 className="size-4" />
                   Configurer
                 </Button>
-                <Button variant="outline" size="sm" disabled={pending} onClick={() => openConnect(a.id)}>
+                <Button variant="outline" size="sm" disabled={pending} onClick={() => openConnect(a.id, a.phone_number)}>
                   <QrCode className="size-4" />
                   {a.connection_status === "connected" ? "Reconnecter" : "Connecter WhatsApp"}
                 </Button>
@@ -241,14 +241,20 @@ export function AgentsManager({
       </Dialog>
 
       {/* Connect dialog */}
+      {(() => {
+        const connectingAgent = agents.find((a) => a.id === connectAgent);
+        const isReconnect = connectingAgent?.connection_status === "connected";
+        return (
       <Dialog open={connectAgent !== null} onOpenChange={(o) => { if (!o) closeConnect(); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Connecter WhatsApp</DialogTitle>
+            <DialogTitle>{isReconnect ? "Reconnecter WhatsApp" : "Connecter WhatsApp"}</DialogTitle>
             <DialogDescription>
               {qr
                 ? "Scannez ce QR code depuis WhatsApp."
-                : "Entrez le numéro WhatsApp à connecter pour cet agent."}
+                : isReconnect
+                  ? "Saisissez le numéro WhatsApp et générez un nouveau QR code pour reconnecter l'agent."
+                  : "Entrez le numéro WhatsApp à connecter pour cet agent."}
             </DialogDescription>
           </DialogHeader>
 
@@ -287,6 +293,8 @@ export function AgentsManager({
           )}
         </DialogContent>
       </Dialog>
+        );
+      })()}
 
       {/* Relay dialog */}
       <Dialog open={relayAgent !== null} onOpenChange={(o) => { if (!o) setRelayAgent(null); }}>
