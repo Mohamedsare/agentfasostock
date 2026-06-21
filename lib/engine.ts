@@ -147,28 +147,32 @@ export async function handleInboundMessage(
   const history = await getRecentHistory(db, conversation.id);
 
   // ── LLM prospect classifier ──────────────────────────────────────────────
-  // Runs only on the very first message of a new contact (history.length === 1
-  // means only the message we just saved exists). Uses gpt-4o-mini (~$0.000025
-  // per call) so the cost is negligible. If the contact is not a prospect the
-  // conversation is marked exclu and we return silently — no expensive AI call,
-  // no reply, no follow-ups. Fails open: any classifier error lets the message
-  // through so real prospects are never dropped by accident.
-  if (history.length === 1) {
+  // Runs on the first TWO messages of a new contact (history.length <= 2).
+  // Uses gpt-4o-mini (~$0.000025/call). If the classifier decides this is NOT
+  // a prospect, we stay silent THIS turn only — we do NOT permanently mark the
+  // conversation exclu. The next message is re-evaluated independently.
+  //
+  // Permanent "exclu" is only set by:
+  //   • The deterministic regex filter above (very high confidence)
+  //   • The admin clicking "Exclure" manually in the dashboard
+  //
+  // This design avoids the trap where a prospect starts with an ambiguous
+  // greeting ("Bonjour", "SALUT MOHAMED") that gets mis-classified, which
+  // would permanently block all their follow-up commercial messages.
+  //
+  // Fails open: any API error returns isProspect=true so real leads are never
+  // dropped silently.
+  if (history.length <= 2) {
     const classification = await classifyProspect(resolved.text, ctx.openaiKey);
     if (!classification.isProspect) {
-      await db
-        .from("conversations")
-        .update({ status: "exclu", mode: "human", ai_enabled: false })
-        .eq("id", conversation.id);
-      await stopFollowUps(db, conversation.id, "cancelled");
-      await logAudit(db, agentId, "classifier", "contact_exclu_auto", conversation.id, {
+      await logAudit(db, agentId, "classifier", "message_skipped_non_prospect", conversation.id, {
         reason: classification.reason,
         preview: resolved.text.slice(0, 100),
       });
       return {
         status: "processed",
         conversationId: conversation.id,
-        reason: `contact_personnel: ${classification.reason}`,
+        reason: `non_prospect_skip: ${classification.reason}`,
       };
     }
   }
