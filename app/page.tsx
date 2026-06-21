@@ -63,27 +63,40 @@ export default function LandingPage() {
       <section className="relative overflow-hidden">
         <div className="bg-grid absolute inset-0 opacity-60" aria-hidden />
         <div className="absolute -top-32 left-1/2 h-72 w-160 -translate-x-1/2 rounded-full bg-primary/20 blur-3xl" aria-hidden />
-        <div className="relative mx-auto max-w-6xl px-4 py-20 text-center sm:px-6 sm:py-28">
-          <Badge tone="primary" className="mx-auto mb-5">
-            <Sparkles className="size-3.5" /> AgentFS · Agent WhatsApp IA
-          </Badge>
-          <h1 className="mx-auto max-w-3xl text-balance text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-            Transformez vos messages WhatsApp en{" "}
-            <span className="text-primary">clients qualifiés</span>
-          </h1>
-          <p className="mx-auto mt-5 max-w-2xl text-balance text-lg text-muted-foreground">
-            Un assistant intelligent qui répond, qualifie et convertit vos prospects automatiquement —
-            pendant que vous gérez votre commerce.
-          </p>
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Button asChild size="lg">
-              <Link href="/signup">
-                Créer mon agent <ArrowRight className="size-4" />
-              </Link>
-            </Button>
-            <Button asChild size="lg" variant="outline">
-              <Link href="/login">Accéder au dashboard</Link>
-            </Button>
+        {/* Image — hidden on mobile, visible from lg */}
+        <Image
+          src="/images/agfs-removebg-preview.png"
+          alt=""
+          fill
+          className="hidden object-contain lg:block"
+          style={{ objectPosition: "8% top" }}
+          priority
+          aria-hidden
+        />
+        <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
+          {/* Mobile: centered. Desktop: pushed right to leave room for image */}
+          <div className="mx-auto max-w-xl text-center lg:ml-[50%] lg:text-left">
+            <Badge tone="primary" className="mx-auto mb-5 lg:mx-0">
+              <Sparkles className="size-3.5" /> AgentFS · Agent WhatsApp IA
+            </Badge>
+            <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">
+              Transformez vos messages WhatsApp en{" "}
+              <span className="text-primary">clients qualifiés</span>
+            </h1>
+            <p className="mt-4 text-balance text-base text-muted-foreground sm:text-lg">
+              Un assistant intelligent qui répond, qualifie et convertit vos prospects automatiquement —
+              pendant que vous gérez votre commerce.
+            </p>
+            <div className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:items-start lg:justify-start">
+              <Button asChild size="lg" className="w-full sm:w-auto">
+                <Link href="/signup">
+                  Créer mon agent <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline" className="w-full sm:w-auto">
+                <Link href="/login">Accéder au dashboard</Link>
+              </Button>
+            </div>
           </div>
         </div>
       </section>
@@ -146,7 +159,7 @@ export default function LandingPage() {
               <h3 className="text-lg font-semibold">Mensuel</h3>
               <p className="mt-1 text-sm text-muted-foreground">Sans engagement</p>
               <div className="mt-5 flex items-end gap-1.5">
-                <span className="text-4xl font-bold tracking-tight">15 000</span>
+                <span className="text-4xl font-bold tracking-tight">12 000</span>
                 <span className="mb-1 text-sm font-medium text-muted-foreground">CFA / mois</span>
               </div>
               <ul className="mt-6 space-y-3">
@@ -170,11 +183,11 @@ export default function LandingPage() {
               <h3 className="text-lg font-semibold">Annuel</h3>
               <p className="mt-1 text-sm text-muted-foreground">Le meilleur rapport qualité-prix</p>
               <div className="mt-5 flex items-end gap-1.5">
-                <span className="text-4xl font-bold tracking-tight">150 000</span>
+                <span className="text-4xl font-bold tracking-tight">120 000</span>
                 <span className="mb-1 text-sm font-medium text-muted-foreground">CFA / an</span>
               </div>
               <p className="mt-1.5 text-sm font-medium text-primary">
-                soit 12 500 CFA/mois — économisez 30 000 CFA
+                soit 10 000 CFA/mois — économisez 24 000 CFA
               </p>
               <ul className="mt-6 space-y-3">
                 {PLAN_FEATURES.map((f) => (

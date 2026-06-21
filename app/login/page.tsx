@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import Image from "next/image";
 import { ArrowLeft, AlertCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { LoginForm } from "@/components/auth/login-form";
@@ -21,8 +22,18 @@ export default async function LoginPage({
     <div className="grid min-h-dvh lg:grid-cols-2">
       {/* Brand panel */}
       <div className="relative hidden flex-col justify-between overflow-hidden bg-sidebar p-10 text-white lg:flex">
-        <div className="bg-grid absolute inset-0 opacity-20" aria-hidden />
-        <div className="absolute -bottom-24 -left-16 size-72 rounded-full bg-primary/30 blur-3xl" aria-hidden />
+        {/* Background image */}
+        <Image
+          src="/images/agent.png"
+          alt=""
+          fill
+          className="object-cover object-center"
+          priority
+          aria-hidden
+        />
+        {/* Dark overlay for readability */}
+        <div className="absolute inset-0 bg-sidebar/35" aria-hidden />
+
         <Logo className="relative [&_span:last-child]:text-white" />
         <div className="relative space-y-4">
           <h2 className="text-3xl font-bold leading-tight">
@@ -53,10 +64,7 @@ export default async function LoginPage({
             <Logo />
           </div>
 
-          <div className="mb-6 space-y-1 text-center">
-            <h1 className="text-2xl font-bold tracking-tight">Connexion admin</h1>
-            <p className="text-sm text-muted-foreground">Accédez à votre tableau de bord AgentFS.</p>
-          </div>
+          <h1 className="mb-6 text-center text-2xl font-bold tracking-tight">Connexion</h1>
 
           {confirmationFailed && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">

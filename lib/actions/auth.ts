@@ -111,6 +111,25 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
   redirect("/onboarding");
 }
 
+/** Sign in with Google via Supabase OAuth. */
+export async function signInWithGoogle(): Promise<void> {
+  if (!isSupabaseConfigured) redirect("/dashboard");
+
+  const supabase = await createClient();
+  const callbackUrl = `${publicEnv.appUrl.replace(/\/$/, "")}/auth/confirm?next=/dashboard`;
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: callbackUrl },
+  });
+
+  if (error || !data.url) {
+    redirect("/login?error=oauth");
+  }
+
+  redirect(data.url);
+}
+
 /** Sign out and return to the login page. */
 export async function signOut(): Promise<void> {
   if (isSupabaseConfigured) {

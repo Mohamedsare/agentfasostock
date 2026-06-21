@@ -4,17 +4,18 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as Dialog from "@radix-ui/react-dialog";
-import { LayoutDashboard, MessagesSquare, Users, LifeBuoy, Menu } from "lucide-react";
+import { LayoutDashboard, Users, LifeBuoy, Menu } from "lucide-react";
+import { WhatsApp } from "@/components/icons/whatsapp";
 import { Logo } from "@/components/logo";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
 import { cn } from "@/lib/utils";
 
 /** The 4 thumb-reachable primary destinations; the 5th slot opens the full menu. */
 const TABS = [
-  { label: "Accueil", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Chats", href: "/dashboard/conversations", icon: MessagesSquare },
-  { label: "Prospects", href: "/dashboard/prospects", icon: Users },
-  { label: "Support", href: "/dashboard/support", icon: LifeBuoy },
+  { label: "Accueil", href: "/dashboard", icon: LayoutDashboard, color: "#3B82F6" },
+  { label: "Chats", href: "/dashboard/conversations", icon: WhatsApp, color: "#25D366" },
+  { label: "Prospects", href: "/dashboard/prospects", icon: Users, color: "#A855F7" },
+  { label: "Support", href: "/dashboard/support", icon: LifeBuoy, color: "#EF4444" },
 ] as const;
 
 /**
@@ -45,14 +46,17 @@ export function BottomNav() {
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "relative flex flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors",
-                  active ? "text-primary" : "text-muted-foreground active:text-foreground",
+                  active ? "text-foreground" : "text-muted-foreground active:text-foreground",
                 )}
               >
                 {active && (
-                  <span className="absolute top-0 h-0.5 w-8 rounded-full bg-primary" />
+                  <span className="absolute top-0 h-0.5 w-8 rounded-full" style={{ backgroundColor: t.color }} />
                 )}
-                <t.icon className={cn("size-5 transition-transform", active && "scale-110")} />
-                {t.label}
+                <t.icon
+                  className={cn("size-5 transition-transform", active && "scale-110")}
+                  style={{ color: active ? t.color : undefined }}
+                />
+                <span style={{ color: active ? t.color : undefined }}>{t.label}</span>
               </Link>
             );
           })}
