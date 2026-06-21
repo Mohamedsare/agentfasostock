@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirmez votre nouvelle adresse email</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
+
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding-bottom:28px;">
+              <table cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color:#16a34a;border-radius:12px;padding:10px 12px;vertical-align:middle;">
+                    <span style="color:#ffffff;font-size:18px;">&#9776;</span>
+                  </td>
+                  <td style="padding-left:10px;vertical-align:middle;">
+                    <span style="font-size:20px;font-weight:700;color:#111827;letter-spacing:-0.5px;">Agent<span style="color:#16a34a;">FS</span></span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Card -->
+          <tr>
+            <td style="background-color:#ffffff;border-radius:8px;border:1px solid #e5e7eb;overflow:hidden;">
+
+              <!-- Top accent bar -->
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color:#16a34a;height:4px;"></td>
+                </tr>
+              </table>
+
+              <!-- Body -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 40px 36px;">
+                <tr>
+                  <td>
+
+                    <!-- Icon -->
+                    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td style="background-color:#f0fdf4;border-radius:50%;width:52px;height:52px;text-align:center;vertical-align:middle;">
+                          <span style="font-size:24px;line-height:52px;">&#9993;</span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Title -->
+                    <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.3px;">
+                      Confirmez votre nouvelle adresse email
+                    </p>
+
+                    <!-- Subtitle -->
+                    <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
+                      Vous avez demandé à modifier votre adresse email sur AgentFS. Cliquez sur le bouton ci-dessous pour confirmer <strong style="color:#111827;">{{ .Email }}</strong> comme votre nouvelle adresse.
+                    </p>
+
+                    <!-- CTA Button -->
+                    <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#16a34a;border-radius:6px;">
+                          <a href="{{ .ConfirmationURL }}"
+                             style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:0.1px;">
+                            Confirmer la nouvelle adresse →
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Divider -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td style="border-top:1px solid #f1f5f9;"></td>
+                      </tr>
+                    </table>
+
+                    <!-- Fallback link -->
+                    <p style="margin:0 0 6px;font-size:12px;color:#9ca3af;">
+                      Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur&nbsp;:
+                    </p>
+                    <p style="margin:0;font-size:12px;word-break:break-all;">
+                      <a href="{{ .ConfirmationURL }}" style="color:#16a34a;text-decoration:none;">{{ .ConfirmationURL }}</a>
+                    </p>
+
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Warning box -->
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color:#fffbeb;border-top:1px solid #fde68a;padding:16px 40px;">
+                    <p style="margin:0;font-size:13px;color:#92400e;line-height:1.5;">
+                      &#9888;&nbsp; Si vous n'avez pas demandé ce changement, ignorez cet email. Votre adresse actuelle restera inchangée.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 0;text-align:center;">
+              <p style="margin:0 0 4px;font-size:12px;color:#9ca3af;">
+                &copy; 2026 AgentFS &mdash; Agent WhatsApp IA
+              </p>
+              <p style="margin:0;font-size:12px;color:#d1d5db;">
+                Cet email a été envoyé automatiquement, merci de ne pas y répondre.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

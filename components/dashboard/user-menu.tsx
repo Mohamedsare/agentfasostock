@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LogOut, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
+import { LogOut, Settings as SettingsIcon, ShieldCheck, UserCircle } from "lucide-react";
 import { signOut } from "@/lib/actions/auth";
 import {
   DropdownMenu,
@@ -46,6 +46,12 @@ export function UserMenu({
             </Link>
           </DropdownMenuItem>
         )}
+        <DropdownMenuItem asChild>
+          <Link href="/dashboard/profile">
+            <UserCircle />
+            Profil
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/dashboard/settings">
             <SettingsIcon />
