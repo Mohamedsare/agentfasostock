@@ -21,6 +21,7 @@ import {
   XCircle,
   LifeBuoy,
   UserX,
+  UserCheck,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import {
   reactivateAi,
   sendManualMessage,
   takeOverConversation,
+  unexcludeContact,
   updateConversationStatus,
   type ActionResult,
 } from "@/lib/actions/conversations";
@@ -148,7 +150,7 @@ export function ConversationDetail({
                 </span>
               </div>
             </div>
-            <StatusActions pending={pending} mode={c.mode} onTakeover={() => run(() => takeOverConversation(c.id), "Vous avez repris la conversation.")} onReactivate={() => run(() => reactivateAi(c.id), "IA réactivée.")} onStatus={setStatus} onExclude={() => run(() => excludeContact(c.id), "Contact exclu — l'agent ne répondra plus.")} />
+            <StatusActions pending={pending} mode={c.mode} status={c.status} onTakeover={() => run(() => takeOverConversation(c.id), "Vous avez repris la conversation.")} onReactivate={() => run(() => reactivateAi(c.id), "IA réactivée.")} onStatus={setStatus} onExclude={() => run(() => excludeContact(c.id), "Contact exclu — l'agent ne répondra plus.")} onUnexclude={() => run(() => unexcludeContact(c.id), "Contact réintégré — l'IA reprend.")} />
           </div>
 
           {/* Thread */}
@@ -277,21 +279,29 @@ export function ConversationDetail({
 function StatusActions({
   pending,
   mode,
+  status,
   onTakeover,
   onReactivate,
   onStatus,
   onExclude,
+  onUnexclude,
 }: {
   pending: boolean;
   mode: "ai" | "human";
+  status: LeadStatus;
   onTakeover: () => void;
   onReactivate: () => void;
   onStatus: (s: LeadStatus, label: string) => void;
   onExclude: () => void;
+  onUnexclude: () => void;
 }) {
   return (
     <div className="flex items-center gap-2">
-      {mode === "ai" ? (
+      {status === "exclu" ? (
+        <Button size="sm" variant="outline" onClick={onUnexclude} disabled={pending} className="hidden sm:inline-flex border-primary text-primary hover:bg-primary/10">
+          <UserCheck className="size-4" /> Réintégrer
+        </Button>
+      ) : mode === "ai" ? (
         <Button size="sm" variant="outline" onClick={onTakeover} disabled={pending} className="hidden sm:inline-flex">
           <UserCog className="size-4" /> Reprendre
         </Button>
@@ -332,9 +342,15 @@ function StatusActions({
             <XCircle className="!text-destructive" /> Marquer perdu
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onExclude} className="text-muted-foreground focus:text-muted-foreground">
-            <UserX /> Exclure (contact personnel)
-          </DropdownMenuItem>
+          {status === "exclu" ? (
+            <DropdownMenuItem onClick={onUnexclude} className="text-primary focus:text-primary">
+              <UserCheck /> Réintégrer ce contact
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={onExclude} className="text-muted-foreground focus:text-muted-foreground">
+              <UserX /> Exclure (contact personnel)
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

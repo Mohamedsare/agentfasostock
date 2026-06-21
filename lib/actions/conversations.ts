@@ -108,6 +108,19 @@ export async function sendManualMessage(
   return { ok: true };
 }
 
+/** Re-include a previously excluded contact and reactivate the AI. */
+export async function unexcludeContact(conversationId: string): Promise<ActionResult> {
+  if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ status: "nouveau", mode: "ai", ai_enabled: true })
+    .eq("id", conversationId);
+  if (error) return { ok: false, error: error.message };
+  revalidateConversation(conversationId);
+  return { ok: true };
+}
+
 /**
  * Exclude a contact permanently: marks the conversation as "exclu" and silences
  * the AI. Subsequent inbound messages from this contact are ignored by the engine.
