@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { isSupabaseConfigured, publicEnv } from "@/lib/env";
+import { isSupabaseConfigured } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 
 export interface ProfileState {
@@ -21,13 +21,9 @@ export async function updateProfile(
   if (!name || !email) return { error: "Nom et email requis." };
 
   const supabase = await createClient();
-  const appUrl = publicEnv.appUrl.replace(/\/$/, "");
   const { error: metaError } = await supabase.auth.updateUser({
     email,
     data: { full_name: name },
-    options: {
-      emailRedirectTo: `${appUrl}/auth/confirm?next=/dashboard/profile`,
-    },
   });
 
   if (metaError) return { error: metaError.message };
