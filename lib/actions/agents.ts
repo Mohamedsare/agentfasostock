@@ -12,6 +12,7 @@ import {
   connectSession,
   getSessionQr,
   getSession,
+  deleteSession,
   updateSessionWebhook,
   mapSessionStatus,
 } from "@/lib/wasender";
@@ -201,7 +202,20 @@ export async function connectAgentWhatsApp(
     if (!ref) return { ok: false, error: "Réponse Wasender inattendue (pas d'id de session)." };
   }
 
-  await connectSession(ref);
+  const connectRes = await connectSession(ref);
+  if (!connectRes.ok) {
+    // Session no longer exists on Wasender — recreate it from scratch.
+    const created = await createSession((agent as { name: string }).name, e164, webhookUrl);
+    if (!created.ok || !created.data) {
+      return { ok: false, error: created.error ?? "Création de session échouée." };
+    }
+    const d = created.data as Record<string, unknown>;
+    ref = d.id != null ? String(d.id) : null;
+    const k = d.api_key ?? d.apiKey ?? d.token;
+    apiKey = typeof k === "string" ? k : apiKey;
+    if (!ref) return { ok: false, error: "Réponse Wasender inattendue (pas d'id de session)." };
+    await connectSession(ref);
+  }
 
   // Wasender takes 2-4 s to initialise the session and generate the QR.
   // Poll up to 3 times with 2 s gaps before giving up and asking the user
