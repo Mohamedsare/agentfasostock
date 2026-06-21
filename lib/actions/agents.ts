@@ -185,9 +185,21 @@ export async function connectAgentWhatsApp(
   }
 
   await connectSession(ref);
-  const qrRes = await getSessionQr(ref);
-  const qrData = (qrRes.data ?? {}) as { qr?: string; qrcode?: string; qrCode?: string };
-  const qr = await qrToDataUrl(qrData.qr ?? qrData.qrcode ?? qrData.qrCode);
+
+  // Wasender takes 2-4 s to initialise the session and generate the QR.
+  // Poll up to 3 times with 2 s gaps before giving up and asking the user
+  // to click "Vérifier" manually.
+  let qr: string | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const qrRes = await getSessionQr(ref);
+    const qrData = (qrRes.data ?? {}) as { qr?: string; qrcode?: string; qrCode?: string };
+    const raw = qrData.qr ?? qrData.qrcode ?? qrData.qrCode;
+    if (raw) {
+      qr = await qrToDataUrl(raw);
+      break;
+    }
+  }
 
   const { error } = await supabase
     .from("agents")
