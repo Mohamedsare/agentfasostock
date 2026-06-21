@@ -108,6 +108,22 @@ export async function sendManualMessage(
   return { ok: true };
 }
 
+/**
+ * Exclude a contact permanently: marks the conversation as "exclu" and silences
+ * the AI. Subsequent inbound messages from this contact are ignored by the engine.
+ */
+export async function excludeContact(conversationId: string): Promise<ActionResult> {
+  if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ status: "exclu", mode: "human", ai_enabled: false })
+    .eq("id", conversationId);
+  if (error) return { ok: false, error: error.message };
+  revalidateConversation(conversationId);
+  return { ok: true };
+}
+
 /** Add a note to a conversation. */
 export async function addNote(
   conversationId: string,

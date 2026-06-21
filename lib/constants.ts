@@ -32,6 +32,7 @@ export const LEAD_STATUS_META: Record<LeadStatus, StatusMeta> = {
   humain_requis: { label: "Humain requis", tone: "danger", description: "Reprise manuelle nécessaire." },
   spam: { label: "Spam", tone: "danger", description: "Message indésirable." },
   perdu: { label: "Perdu", tone: "neutral", description: "Opportunité abandonnée." },
+  exclu: { label: "Exclu", tone: "neutral", description: "Contact personnel, l'agent ne répond pas." },
 };
 
 export const LEAD_STATUSES = Object.keys(LEAD_STATUS_META) as LeadStatus[];

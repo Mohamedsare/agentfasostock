@@ -82,6 +82,11 @@ export async function handleInboundMessage(
   const contact = await upsertContact(db, inbound, agentId);
   const conversation = await getOrCreateConversation(db, contact.id, agentId);
 
+  // If this contact is marked as personal/excluded, never respond and stay silent.
+  if (conversation.status === "exclu") {
+    return { status: "ignored", reason: "contact_exclu", conversationId: conversation.id };
+  }
+
   // Save the inbound message + bump conversation metadata.
   await db.from("messages").insert({
     agent_id: agentId,
@@ -260,8 +265,7 @@ async function applyAgentResult(
       next_action: result.next_action,
       last_message_at: new Date().toISOString(),
       last_message_preview: result.reply.slice(0, 160),
-      // Hand the conversation over to Mohamed and silence the AI so it stops
-      // replying — the prospect keeps talking to "the same person".
+      // Silence the AI on handoffs and excluded (personal) contacts.
       ...(isHandoff ? { mode: "human", ai_enabled: false } : {}),
     })
     .eq("id", conversation.id);
@@ -603,7 +607,8 @@ function isSilentHandoff(status: LeadStatus): boolean {
   return (
     status === "humain_requis" ||
     status === "prospect_qualifie" ||
-    status === "prospect_chaud"
+    status === "prospect_chaud" ||
+    status === "exclu"
   );
 }
 

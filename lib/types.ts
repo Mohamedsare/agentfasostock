@@ -13,7 +13,8 @@ export type LeadStatus =
   | "support_client"
   | "humain_requis"
   | "spam"
-  | "perdu";
+  | "perdu"
+  | "exclu";
 
 export type Intent = "support" | "prospection" | "pricing" | "demo" | "other";
 

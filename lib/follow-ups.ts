@@ -27,6 +27,8 @@ const TERMINAL_STATUSES: ReadonlySet<LeadStatus> = new Set<LeadStatus>([
   "prospect_qualifie",
   "prospect_chaud",
   "humain_requis",
+  // Personal/family contacts are excluded; never send follow-ups.
+  "exclu",
 ]);
 
 /** True when a conversation status should stop (not schedule) follow-ups. */

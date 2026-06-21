@@ -20,6 +20,7 @@ import {
   Plus,
   XCircle,
   LifeBuoy,
+  UserX,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ import { toast } from "sonner";
 import { cn, contactLabel, formatDateTime, getInitials, timeAgo } from "@/lib/utils";
 import {
   addNote,
+  excludeContact,
   reactivateAi,
   sendManualMessage,
   takeOverConversation,
@@ -146,7 +148,7 @@ export function ConversationDetail({
                 </span>
               </div>
             </div>
-            <StatusActions pending={pending} mode={c.mode} onTakeover={() => run(() => takeOverConversation(c.id), "Vous avez repris la conversation.")} onReactivate={() => run(() => reactivateAi(c.id), "IA réactivée.")} onStatus={setStatus} />
+            <StatusActions pending={pending} mode={c.mode} onTakeover={() => run(() => takeOverConversation(c.id), "Vous avez repris la conversation.")} onReactivate={() => run(() => reactivateAi(c.id), "IA réactivée.")} onStatus={setStatus} onExclude={() => run(() => excludeContact(c.id), "Contact exclu — l'agent ne répondra plus.")} />
           </div>
 
           {/* Thread */}
@@ -278,12 +280,14 @@ function StatusActions({
   onTakeover,
   onReactivate,
   onStatus,
+  onExclude,
 }: {
   pending: boolean;
   mode: "ai" | "human";
   onTakeover: () => void;
   onReactivate: () => void;
   onStatus: (s: LeadStatus, label: string) => void;
+  onExclude: () => void;
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -326,6 +330,10 @@ function StatusActions({
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => onStatus("perdu", "Marqué perdu.")} className="text-destructive focus:text-destructive">
             <XCircle className="!text-destructive" /> Marquer perdu
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onExclude} className="text-muted-foreground focus:text-muted-foreground">
+            <UserX /> Exclure (contact personnel)
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
