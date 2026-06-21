@@ -84,12 +84,29 @@ export async function createAgent(input: CreateAgentInput): Promise<ActionResult
   return { ok: true };
 }
 
-/** Delete an agent (cascades its data). */
+/** Delete an agent (cascades its data) and removes its Wasender session. */
 export async function deleteAgent(agentId: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
   const supabase = await createClient();
+
+  // Fetch the session ref before deleting so we can clean up Wasender.
+  const { data: agent } = await supabase
+    .from("agents")
+    .select("wasender_session_ref")
+    .eq("id", agentId)
+    .maybeSingle();
+
   const { error } = await supabase.from("agents").delete().eq("id", agentId);
   if (error) return { ok: false, error: error.message };
+
+  // Best-effort: delete the Wasender session (don't block on failure).
+  const ref = (agent as { wasender_session_ref?: string | null } | null)?.wasender_session_ref;
+  if (ref) {
+    deleteSession(ref).catch((e) =>
+      console.error("[deleteAgent] Wasender session cleanup failed:", e),
+    );
+  }
+
   revalidatePath("/dashboard/agents");
   return { ok: true };
 }
