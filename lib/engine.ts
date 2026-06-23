@@ -304,8 +304,7 @@ async function applyAgentResult(
   },
 ) {
   const { conversation, contact, result, ctx } = args;
-  // Qualified/hot leads (and explicit human requests) are handed to Mohamed
-  // silently: the AI stops answering and he takes over in person.
+  // Only humain_requis and exclu stop the AI; qualified/hot prospects keep getting replies.
   const isHandoff = isSilentHandoff(result.status);
 
   await db
@@ -652,17 +651,12 @@ async function getActiveProducts(db: Db, agentId: string): Promise<Product[]> {
 /**
  * Statuses where the lead is handed to Mohamed SILENTLY: the agent must not
  * reply to the prospect (never announce "je transmets vos infos à Mohamed"),
- * the conversation switches to human mode so the AI stops answering, and Mohamed
- * is alerted over WhatsApp. Covers qualified/hot leads and explicit human
- * requests. The prospect must never be told the conversation was handed over.
+ * the conversation switches to human mode so the AI stops answering.
+ * Only explicit human requests and excluded contacts stop the AI.
+ * Qualified/hot prospects still get AI replies — the admin is notified separately.
  */
 function isSilentHandoff(status: LeadStatus): boolean {
-  return (
-    status === "humain_requis" ||
-    status === "prospect_qualifie" ||
-    status === "prospect_chaud" ||
-    status === "exclu"
-  );
+  return status === "humain_requis" || status === "exclu";
 }
 
 function emailTriggerFor(status: LeadStatus): EmailTrigger | null {
