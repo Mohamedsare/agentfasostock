@@ -27,7 +27,7 @@ export const LEAD_STATUS_META: Record<LeadStatus, StatusMeta> = {
   prospect_tiede: { label: "Tiède", tone: "warning", description: "Intérêt naissant." },
   prospect_chaud: { label: "Chaud", tone: "accent", description: "Fort intérêt, à appeler vite." },
   prospect_qualifie: { label: "Qualifié", tone: "success", description: "Prêt pour une démonstration." },
-  client_converti: { label: "Converti", tone: "primary", description: "Client FasoStock actif." },
+  client_converti: { label: "Converti", tone: "primary", description: "Client actif converti." },
   support_client: { label: "Support", tone: "info", description: "Client existant à assister." },
   humain_requis: { label: "Humain requis", tone: "danger", description: "Reprise manuelle nécessaire." },
   spam: { label: "Spam", tone: "danger", description: "Message indésirable." },
@@ -56,7 +56,7 @@ export const SUPPORT_CATEGORY_META: Record<SupportCategory, string> = {
 };
 
 export const KNOWLEDGE_CATEGORY_META: Record<KnowledgeCategory, string> = {
-  presentation: "Présentation FasoStock",
+  presentation: "Présentation",
   fonctionnalites: "Fonctionnalités",
   prix: "Prix",
   demonstration: "Démonstration",
@@ -78,11 +78,11 @@ export const MAX_FOLLOW_UPS = 3;
 
 /** Default agent configuration used until Supabase has a row. */
 export const DEFAULT_AGENT_SETTINGS = {
-  agent_name: "Awa — Assistante FasoStock",
+  agent_name: "Agent Commercial",
   tone: "professionnel" as const,
   language: "fr",
   welcome_message:
-    "Bonjour 👋 Je suis l'assistante FasoStock. Je peux vous aider à mieux gérer votre stock et vos ventes. Quel type de commerce gérez-vous ?",
+    "Bonjour 👋 Merci de nous contacter ! Je suis votre assistant. Comment puis-je vous aider ?",
   qualified_threshold: SCORE_THRESHOLDS.qualified,
   hot_threshold: SCORE_THRESHOLDS.hot,
   operating_mode: "hybride" as const,

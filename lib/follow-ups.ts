@@ -226,9 +226,9 @@ export function buildFollowUpMessage(step: number, contactName?: string | null):
   const hi = first ? `Bonjour ${first} 👋` : "Bonjour 👋";
   switch (step) {
     case 1:
-      return `${hi} Je reviens vers vous suite à notre échange. Avez-vous eu le temps d'y réfléchir ? Je reste dispo pour répondre à vos questions sur FasoStock 🙂`;
+      return `${hi} Je reviens vers vous suite à notre échange. Avez-vous eu le temps d'y réfléchir ? Je reste disponible pour répondre à vos questions 🙂`;
     case 2:
-      return `${hi} Petit rappel concernant FasoStock pour mieux gérer votre stock et vos ventes. Souhaitez-vous que je vous montre comment ça marche en quelques minutes ?`;
+      return `${hi} Petit rappel suite à notre discussion. Souhaitez-vous que je vous montre comment ça marche en quelques minutes ?`;
     case 3:
       return `${hi} Je ne veux pas vous déranger davantage 🙏 Si vous le souhaitez encore, je peux vous organiser une démonstration quand vous voulez. Sinon, je vous laisse revenir vers moi quand le moment sera bon !`;
     default:

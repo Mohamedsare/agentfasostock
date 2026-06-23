@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, ArrowLeft, Sparkles, Target, Headphones, Zap, ChevronRight } from "lucide-react";
+import { Loader2, ArrowLeft, Sparkles, Target, Headphones, Zap, ChevronRight, TrendingUp } from "lucide-react";
 import { AGENT_TEMPLATES, type AgentType } from "@/lib/agent-templates";
 import { createAgent } from "@/lib/actions/agents";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,13 @@ const TYPE_VISUAL: Record<
     bg: "bg-violet-500/10",
     border: "border-violet-500/30",
     ring: "ring-violet-500/20",
+  },
+  vente: {
+    icon: TrendingUp,
+    color: "text-emerald-500",
+    bg: "bg-emerald-500/10",
+    border: "border-emerald-500/30",
+    ring: "ring-emerald-500/20",
   },
 };
 
