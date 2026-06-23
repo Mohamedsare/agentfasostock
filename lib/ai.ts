@@ -81,9 +81,26 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       return fallbackResult(options, heuristic.score);
     }
 
+    // Normalise nullish fields from LLM (null → undefined) → clean AgentResult shape.
+    const ec = parsed.data.extracted_contact;
+    const normalised: AgentResult = {
+      ...parsed.data,
+      media: parsed.data.media
+        ? parsed.data.media.map((m) => ({ ...m, caption: m.caption ?? undefined }))
+        : undefined,
+      extracted_contact: ec
+        ? {
+            name: ec.name ?? undefined,
+            city: ec.city ?? undefined,
+            need: ec.need ?? undefined,
+            business_type: ec.business_type ?? undefined,
+          }
+        : undefined,
+    };
+
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
-    const sanitized = extractMarkdownImages(parsed.data);
+    const sanitized = extractMarkdownImages(normalised);
 
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.

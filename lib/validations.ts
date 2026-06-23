@@ -20,26 +20,27 @@ export const intentSchema = z.enum(["support", "prospection", "pricing", "demo",
 const mediaAttachmentSchema = z.object({
   type: z.enum(["image", "document", "audio", "video"]),
   url: z.string().url(),
-  caption: z.string().optional(),
+  caption: z.string().nullish(),
 });
 
+// LLM often returns null for unknown fields — nullish() accepts null, undefined, or string.
 const extractedContactSchema = z.object({
-  name: z.string().optional(),
-  city: z.string().optional(),
-  need: z.string().optional(),
-  business_type: z.string().optional(),
-}).optional();
+  name: z.string().nullish(),
+  city: z.string().nullish(),
+  need: z.string().nullish(),
+  business_type: z.string().nullish(),
+}).nullish();
 
 /** Structured AI output (CLAUDE.md §25). */
 export const agentResultSchema = z.object({
-  reply: z.string(),
-  intent: intentSchema,
-  status: leadStatusSchema,
-  score: z.number().min(0).max(100),
+  reply: z.string().default(""),
+  intent: intentSchema.default("other"),
+  status: leadStatusSchema.default("nouveau"),
+  score: z.number().min(0).max(100).default(0),
   summary: z.string().default(""),
   next_action: z.string().default(""),
   should_notify_admin: z.boolean().default(false),
-  media: z.array(mediaAttachmentSchema).max(3).optional(),
+  media: z.array(mediaAttachmentSchema).max(3).nullish(),
   extracted_contact: extractedContactSchema,
 });
 
