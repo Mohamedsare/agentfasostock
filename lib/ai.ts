@@ -88,10 +88,10 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.
     const blended = clamp(Math.round((sanitized.score + heuristic.score) / 2));
-    const status =
-      sanitized.status === "humain_requis" || sanitized.status === "support_client"
-        ? sanitized.status
-        : statusForScore(blended, heuristic.criteria);
+    const PRESERVE_STATUS = new Set(["humain_requis", "support_client", "exclu", "spam", "perdu", "client_converti"]);
+    const status = PRESERVE_STATUS.has(sanitized.status)
+      ? sanitized.status
+      : statusForScore(blended, heuristic.criteria);
 
     return {
       ...sanitized,
@@ -162,7 +162,7 @@ function extractMarkdownImages(data: AgentResult): AgentResult {
     console.info(`[ai] extracted ${extracted.length} media item(s) from reply text → media[]`);
   }
 
-  return { ...data, reply: reply || data.reply, media: allMedia };
+  return { ...data, reply, media: allMedia };
 }
 
 /** Deterministic response used when the LLM is unavailable. */

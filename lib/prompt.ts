@@ -72,14 +72,14 @@ export function buildSystemPrompt(options: {
 
   const activeProducts = products.filter((p) => p.is_active);
   const productsBlock = activeProducts.length
-    ? `\n\nCATALOGUE PRODUITS (présente avec précision, ne modifie jamais les prix) :\n${activeProducts
+    ? `\n\nCATALOGUE PRODUITS — Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".\n${activeProducts
         .map((p) => {
-          const price = p.price != null ? ` — Prix : ${p.price} ${p.currency}` : "";
-          const desc = p.description ? ` | ${p.description}` : "";
+          const price = p.price != null ? `\n  Prix : ${p.price} ${p.currency}` : "";
+          const desc = p.description ? `\n  Description : ${p.description}` : "";
           const imgs = p.images.length > 0
-            ? ` | Images: ${p.images.slice(0, 3).join(", ")}`
+            ? `\n  Photos (à mettre dans media[]) : ${p.images.slice(0, 3).join(" | ")}`
             : "";
-          return `- "${p.name}"${price}${desc}${imgs}`;
+          return `• ${p.name}${price}${desc}${imgs}`;
         })
         .join("\n")}`
     : "";

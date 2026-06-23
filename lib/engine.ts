@@ -316,7 +316,7 @@ async function applyAgentResult(
       summary: result.summary,
       next_action: result.next_action,
       last_message_at: new Date().toISOString(),
-      last_message_preview: result.reply.slice(0, 160),
+      last_message_preview: (result.reply ?? "").slice(0, 160),
       // Silence the AI on handoffs and excluded (personal) contacts.
       ...(isHandoff ? { mode: "human", ai_enabled: false } : {}),
     })

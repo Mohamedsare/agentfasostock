@@ -32,7 +32,7 @@ const extractedContactSchema = z.object({
 
 /** Structured AI output (CLAUDE.md §25). */
 export const agentResultSchema = z.object({
-  reply: z.string().min(1),
+  reply: z.string(),
   intent: intentSchema,
   status: leadStatusSchema,
   score: z.number().min(0).max(100),
