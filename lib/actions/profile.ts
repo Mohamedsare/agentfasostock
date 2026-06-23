@@ -22,13 +22,10 @@ export async function updateProfile(
 
   const supabase = await createClient();
   const appUrl = publicEnv.appUrl.replace(/\/$/, "");
-  const { error: metaError } = await supabase.auth.updateUser({
-    email,
-    data: { full_name: name },
-    options: {
-      emailRedirectTo: `${appUrl}/auth/confirm?next=/dashboard/profile`,
-    },
-  });
+  const { error: metaError } = await supabase.auth.updateUser(
+    { email, data: { full_name: name } },
+    { emailRedirectTo: `${appUrl}/auth/confirm?next=/dashboard/profile` },
+  );
 
   if (metaError) return { error: metaError.message };
 
