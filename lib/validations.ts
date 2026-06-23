@@ -12,6 +12,7 @@ export const leadStatusSchema = z.enum([
   "humain_requis",
   "spam",
   "perdu",
+  "exclu",
 ]);
 
 export const intentSchema = z.enum(["support", "prospection", "pricing", "demo", "other"]);
@@ -21,6 +22,13 @@ const mediaAttachmentSchema = z.object({
   url: z.string().url(),
   caption: z.string().optional(),
 });
+
+const extractedContactSchema = z.object({
+  name: z.string().optional(),
+  city: z.string().optional(),
+  need: z.string().optional(),
+  business_type: z.string().optional(),
+}).optional();
 
 /** Structured AI output (CLAUDE.md §25). */
 export const agentResultSchema = z.object({
@@ -32,6 +40,7 @@ export const agentResultSchema = z.object({
   next_action: z.string().default(""),
   should_notify_admin: z.boolean().default(false),
   media: z.array(mediaAttachmentSchema).max(3).optional(),
+  extracted_contact: extractedContactSchema,
 });
 
 /** Body for POST /api/agent/respond and /api/labs/simulate. */

@@ -351,6 +351,14 @@ export interface AgentMediaAttachment {
   caption?: string;
 }
 
+/** Contact facts the AI extracts from the conversation to persist immediately. */
+export interface ExtractedContact {
+  name?: string;
+  city?: string;
+  need?: string;
+  business_type?: string;
+}
+
 /** Structured response the AI must always return (see CLAUDE.md §25). */
 export interface AgentResult {
   reply: string;
@@ -362,6 +370,8 @@ export interface AgentResult {
   should_notify_admin: boolean;
   /** Media the agent has decided to send alongside the text reply. Max 3. */
   media?: AgentMediaAttachment[];
+  /** Facts learned in this turn — saved to the contacts table immediately. */
+  extracted_contact?: ExtractedContact;
 }
 
 /** Conversation joined with its contact — convenient for list/detail views. */

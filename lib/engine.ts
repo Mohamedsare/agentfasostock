@@ -322,6 +322,22 @@ async function applyAgentResult(
     })
     .eq("id", conversation.id);
 
+  // Persist contact facts extracted by the AI (name, city, need, business_type).
+  // Only overwrite a field when the AI found a non-empty value AND the field is
+  // currently blank — never erase data the webhook or a human already set.
+  const ec = result.extracted_contact;
+  if (ec) {
+    const patch: Record<string, string> = {};
+    if (ec.name && !contact.name) patch.name = ec.name;
+    if (ec.city && !contact.city) patch.city = ec.city;
+    if (ec.need) patch.need = ec.need; // always update: need evolves as conversation progresses
+    if (ec.business_type && !contact.business_type) patch.business_type = ec.business_type;
+    if (Object.keys(patch).length) {
+      await db.from("contacts").update(patch).eq("id", contact.id);
+      Object.assign(contact, patch); // keep in-memory copy in sync
+    }
+  }
+
   // Store a qualification snapshot with the matched criteria.
   const contactText = args.history.filter((m) => m.role === "user").map((m) => m.content).join("\n");
   const { criteria } = scoreConversation(contactText, conversation.score);

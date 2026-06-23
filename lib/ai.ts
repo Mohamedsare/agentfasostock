@@ -76,6 +76,8 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     const parsed = agentResultSchema.safeParse(JSON.parse(raw));
 
     if (!parsed.success) {
+      console.error("[ai] schema validation failed — using fallback. Issues:", JSON.stringify(parsed.error.issues));
+      console.error("[ai] raw LLM output was:", raw.slice(0, 500));
       return fallbackResult(options, heuristic.score);
     }
 
@@ -190,12 +192,16 @@ function fallbackResult(options: GenerateOptions, score: number): AgentResult {
 }
 
 function craftFallbackReply(lastUser: string, status: string): string {
-  if (status === "spam") return "";
-  if (/prix|tarif|combien/i.test(lastUser)) {
-    return "Bonne question ! Le tarif dépend de votre activité. Pour vous proposer la formule adaptée, pouvez-vous me dire quel type de commerce vous gérez ?";
+  if (status === "spam" || status === "exclu") return "";
+  const t = lastUser.toLowerCase();
+  if (/photo|image|produit|article|catalogue|montre|envoi.*(photo|image)/i.test(t)) {
+    return "Je vérifie ça pour vous et je reviens dans un instant avec les informations ! 🙏";
   }
-  if (/démo|demo|tester|essayer/i.test(lastUser)) {
+  if (/livraison|adresse|commander|commande|acheter|prix|tarif|combien/i.test(t)) {
+    return "Bien reçu ! Je transmets votre demande à l'équipe et je reviens vers vous rapidement. 🙏";
+  }
+  if (/démo|demo|tester|essayer/i.test(t)) {
     return "Avec plaisir ! Je peux organiser une démonstration. Quel jour seriez-vous disponible ?";
   }
-  return "Merci pour votre message 🙏 Pour bien vous aider, pouvez-vous me dire quel type de commerce vous gérez et dans quelle ville ?";
+  return "Merci pour votre message 🙏 Comment puis-je vous aider ?";
 }
