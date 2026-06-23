@@ -5,6 +5,7 @@ import { buildSystemPrompt, type ConversationMemory } from "@/lib/prompt";
 import { clamp, scoreConversation, statusForScore, shouldNotifyAdmin } from "@/lib/scoring";
 import { agentResultSchema } from "@/lib/validations";
 import type {
+  AgentMediaAttachment,
   AgentResult,
   AgentSettings,
   AgentTone,
@@ -78,24 +79,88 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       return fallbackResult(options, heuristic.score);
     }
 
+    // Extract any markdown images the model accidentally put in `reply`
+    // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
+    const sanitized = extractMarkdownImages(parsed.data);
+
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.
-    const blended = clamp(Math.round((parsed.data.score + heuristic.score) / 2));
+    const blended = clamp(Math.round((sanitized.score + heuristic.score) / 2));
     const status =
-      parsed.data.status === "humain_requis" || parsed.data.status === "support_client"
-        ? parsed.data.status
+      sanitized.status === "humain_requis" || sanitized.status === "support_client"
+        ? sanitized.status
         : statusForScore(blended, heuristic.criteria);
 
     return {
-      ...parsed.data,
+      ...sanitized,
       score: blended,
       status,
-      should_notify_admin: parsed.data.should_notify_admin || shouldNotifyAdmin(status),
+      should_notify_admin: sanitized.should_notify_admin || shouldNotifyAdmin(status),
     };
   } catch (error) {
     console.error("[ai] generation failed, using fallback:", error);
     return fallbackResult(options, heuristic.score);
   }
+}
+
+/**
+ * Scan `reply` for markdown image syntax ![alt](url) and bare https URLs that
+ * point to known media extensions. Extract them into `media[]` and return a
+ * clean reply string with those tokens removed.
+ *
+ * This guards against models that put image links in the text field instead of
+ * using the dedicated `media` array.
+ */
+function extractMarkdownImages(data: AgentResult): AgentResult {
+  const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|svg|avif)(\?[^\s)]*)?$/i;
+  const VIDEO_EXTS = /\.(mp4|mov|webm|avi|mkv)(\?[^\s)]*)?$/i;
+  const DOC_EXTS = /\.(pdf|docx?|xlsx?|pptx?|csv|txt)(\?[^\s)]*)?$/i;
+
+  const extracted: AgentResult["media"] = [];
+
+  // Match ![alt text](url) or ![](url)
+  const MARKDOWN_IMG = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+  // Match bare https URLs pointing to a media file
+  const BARE_URL = /https?:\/\/\S+\.(?:jpe?g|png|gif|webp|svg|avif|mp4|mov|webm|pdf|docx?|xlsx?)(?:\?[^\s]*)?\b/gi;
+
+  let reply = data.reply;
+
+  reply = reply.replace(MARKDOWN_IMG, (_match, alt: string, url: string) => {
+    const type: AgentMediaAttachment["type"] = VIDEO_EXTS.test(url)
+      ? "video"
+      : DOC_EXTS.test(url)
+        ? "document"
+        : "image";
+    extracted.push({ type, url, caption: alt.trim() || undefined });
+    return "";
+  });
+
+  reply = reply.replace(BARE_URL, (url: string) => {
+    if (extracted.some((m) => m.url === url)) return "";
+    const type: AgentMediaAttachment["type"] = VIDEO_EXTS.test(url)
+      ? "video"
+      : DOC_EXTS.test(url)
+        ? "document"
+        : IMAGE_EXTS.test(url)
+          ? "image"
+          : "image";
+    extracted.push({ type, url });
+    return "";
+  });
+
+  // Clean up leftover whitespace / double newlines
+  reply = reply.replace(/\n{3,}/g, "\n\n").trim();
+
+  if (extracted.length === 0) return data;
+
+  const existingMedia = data.media ?? [];
+  const allMedia = [...existingMedia, ...extracted].slice(0, 3);
+
+  if (extracted.length > 0) {
+    console.info(`[ai] extracted ${extracted.length} media item(s) from reply text → media[]`);
+  }
+
+  return { ...data, reply: reply || data.reply, media: allMedia };
 }
 
 /** Deterministic response used when the LLM is unavailable. */

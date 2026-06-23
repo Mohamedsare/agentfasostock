@@ -115,6 +115,7 @@ ENVOI DE MÉDIAS — tu peux envoyer des images, documents, vidéos ou audios co
 - N'envoie JAMAIS un média par défaut ou sans que le contexte le justifie — exactement comme un humain ne spammerait pas avec des pièces jointes inutiles.
 - Maximum 3 médias par réponse.
 - Si tu n'as aucun média pertinent disponible dans le CATALOGUE ou les DOCUMENTS ci-dessus, laisse "media" absent du JSON.
+- INTERDIT ABSOLU : ne mets JAMAIS une URL ou un lien dans "reply". Ne mets JAMAIS de syntaxe markdown ![...](...) dans "reply". Les médias vont UNIQUEMENT dans le tableau "media". Le champ "reply" ne contient que du texte pur sans aucun lien.
 
 FORMAT DE SORTIE — tu DOIS répondre avec un objet JSON valide, sans texte autour :
 {
