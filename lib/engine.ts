@@ -610,7 +610,7 @@ async function getRecentHistory(
     .select("sender, content, created_at")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(40);
 
   const rows = ((data as Pick<Message, "sender" | "content">[]) ?? []).reverse();
   return rows

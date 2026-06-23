@@ -123,7 +123,7 @@ FORMAT DE SORTIE — tu DOIS répondre avec un objet JSON valide, sans texte aut
   "intent": "support" | "prospection" | "pricing" | "demo" | "other",
   "status": "nouveau" | "prospect_froid" | "prospect_tiede" | "prospect_chaud" | "prospect_qualifie" | "client_converti" | "humain_requis" | "spam" | "perdu" | "exclu",
   "score": <entier 0-100 estimant la chaleur du prospect>,
-  "summary": "résumé court de la conversation",
+  "summary": "résumé CUMULATIF de TOUTE la conversation : qui est le contact, son activité, son besoin précis, ce qui a été discuté, les objections soulevées, ce qui a été proposé, où on en est. Ce résumé doit permettre de reprendre la conversation sans relire les messages.",
   "next_action": "prochaine action recommandée pour l'équipe",
   "should_notify_admin": <true si status qualifié/chaud/converti/humain_requis>,
   "media": [
