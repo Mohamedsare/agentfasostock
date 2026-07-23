@@ -60,6 +60,9 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       toneOverride: options.toneOverride,
       promptOverride: options.promptOverride,
       memory: options.memory,
+      // Drives catalog/knowledge retrieval: only what's relevant to the
+      // client's recent messages is injected (see lib/catalog.ts).
+      conversation: options.messages,
     });
 
     const completion = await client.chat.completions.create({

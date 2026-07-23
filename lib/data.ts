@@ -1,6 +1,7 @@
 import { isSupabaseConfigured } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
-import { getActiveAgent, getActiveAgentId } from "@/lib/agents";
+import { getActiveAgent, getActiveAgentId, getCurrentOrgId } from "@/lib/agents";
+import type { EfactListItem } from "@/components/e-fact/types";
 import { DEFAULT_AGENT_SETTINGS, SCORE_THRESHOLDS } from "@/lib/constants";
 import { buildSystemPrompt } from "@/lib/prompt";
 import {
@@ -147,6 +148,20 @@ export async function getProducts(): Promise<Product[]> {
     .eq("agent_id", agentId)
     .order("created_at", { ascending: false });
   return (data as unknown as Product[]) ?? [];
+}
+
+/** E_Fact archive for the current org — lightweight rows (no `payload`). */
+export async function getEfactDocuments(): Promise<EfactListItem[]> {
+  if (usingMockData) return [];
+  const orgId = await getCurrentOrgId();
+  if (!orgId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("efact_documents")
+    .select("id, kind, number, client_name, currency, total, issue_date, status, created_at")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false });
+  return (data as unknown as EfactListItem[]) ?? [];
 }
 
 export async function getFollowUps(): Promise<FollowUp[]> {

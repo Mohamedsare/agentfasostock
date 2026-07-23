@@ -1,4 +1,9 @@
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
+import {
+  buildQueryTokens,
+  selectRelevantKnowledge,
+  selectRelevantProducts,
+} from "@/lib/catalog";
 import type {
   AgentSettings,
   AgentTone,
@@ -37,6 +42,12 @@ export function buildSystemPrompt(options: {
   toneOverride?: AgentTone;
   promptOverride?: string;
   memory?: ConversationMemory;
+  /**
+   * The conversation so far. Used to retrieve only the products and knowledge
+   * relevant to what the client is asking, instead of dumping the whole
+   * catalog every turn. Omit to fall back to a full dump.
+   */
+  conversation?: { role: "user" | "assistant"; content: string }[];
 }): string {
   const {
     settings = {},
@@ -46,7 +57,15 @@ export function buildSystemPrompt(options: {
     toneOverride,
     promptOverride,
     memory,
+    conversation = [],
   } = options;
+
+  // Retrieve the items relevant to the current ask (small catalogs pass through
+  // whole — see lib/catalog.ts). This keeps the prompt compact and, crucially,
+  // stops the model from losing the right product in a long flat list.
+  const queryTokens = buildQueryTokens(conversation);
+  const productSel = selectRelevantProducts(products, queryTokens);
+  const knowledgeSel = selectRelevantKnowledge(knowledge, queryTokens);
 
   const agentName = settings.agent_name ?? DEFAULT_AGENT_SETTINGS.agent_name;
   const tone = toneOverride ?? settings.tone ?? DEFAULT_AGENT_SETTINGS.tone;
@@ -57,8 +76,10 @@ export function buildSystemPrompt(options: {
     settings.system_prompt ??
     DEFAULT_SYSTEM_PROMPT(agentName);
 
-  const knowledgeBlock = knowledge.length
-    ? `\n\nBASE DE CONNAISSANCE (utilise ces informations en priorité, ne contredis jamais ces faits) :\n${knowledge
+  const knowledgeBlock = knowledgeSel.shown.length
+    ? `\n\nBASE DE CONNAISSANCE (utilise ces informations en priorité, ne contredis jamais ces faits)${
+        knowledgeSel.filtered ? " — extraits les plus pertinents pour la demande en cours" : ""
+      } :\n${knowledgeSel.shown
         .map((k) => `- [${k.category}] ${k.title}: ${k.content}`)
         .join("\n")}`
     : "";
@@ -70,9 +91,12 @@ export function buildSystemPrompt(options: {
         .join("\n")}`
     : "";
 
-  const activeProducts = products.filter((p) => p.is_active);
-  const productsBlock = activeProducts.length
-    ? `\n\nCATALOGUE PRODUITS — Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".\n${activeProducts
+  const productsHeader = productSel.filtered
+    ? `\n\nCATALOGUE PRODUITS — Voici les articles les plus pertinents pour ce que le client demande (sélectionnés dans un catalogue plus large). Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".`
+    : `\n\nCATALOGUE PRODUITS — Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".`;
+
+  const productsBlock = productSel.shown.length
+    ? `${productsHeader}\n${productSel.shown
         .map((p) => {
           const price = p.price != null ? `\n  Prix : ${p.price} ${p.currency}` : "";
           const desc = p.description ? `\n  Description : ${p.description}` : "";
@@ -81,7 +105,13 @@ export function buildSystemPrompt(options: {
             : "";
           return `• ${p.name}${price}${desc}${imgs}`;
         })
-        .join("\n")}`
+        .join("\n")}${
+        productSel.otherNames.length
+          ? `\n\nAUTRES PRODUITS DISPONIBLES (noms seuls — ces articles existent aussi au catalogue). Sers-t'en pour savoir ce que l'entreprise propose : si le client s'y intéresse, confirme la disponibilité et propose-les. Ne dis JAMAIS qu'un de ces produits n'existe pas. Leurs prix et photos apparaîtront en détail quand le client les cible précisément :\n${productSel.otherNames
+              .map((n) => `• ${n}`)
+              .join("\n")}`
+          : ""
+      }`
     : "";
 
   const memoryBlock = buildMemoryBlock(memory);

@@ -11,6 +11,7 @@ import {
   Settings,
   Users2,
   ScrollText,
+  FileText,
   type LucideIcon,
 } from "lucide-react";
 import { WhatsApp } from "@/components/icons/whatsapp";
@@ -29,6 +30,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Prospects", href: "/dashboard/prospects", icon: Users, color: "#A855F7", group: "principal" },
   { label: "Clients qualifiés", href: "/dashboard/qualified-leads", icon: Flame, color: "#F97316", group: "principal" },
   { label: "Support client", href: "/dashboard/support", icon: LifeBuoy, color: "#EF4444", group: "principal" },
+  { label: "E_Fact", href: "/dashboard/e-fact", icon: FileText, color: "#0EA5E9", group: "principal" },
   { label: "Agents", href: "/dashboard/agents", icon: Bot, color: "#06B6D4", group: "intelligence" },
   { label: "Base de connaissance", href: "/dashboard/knowledge-base", icon: BookOpen, color: "#EAB308", group: "intelligence" },
   { label: "Relances", href: "/dashboard/follow-ups", icon: Send, color: "#6366F1", group: "intelligence" },
