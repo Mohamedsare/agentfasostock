@@ -123,14 +123,18 @@ export function currencySymbol(code: string): string {
 /** Zero-decimal currencies (XOF/XAF) are formatted without cents. */
 const ZERO_DECIMAL = new Set(["XOF", "XAF"]);
 
-export function formatMoney(amount: number, code: string): string {
+/** Grouped number only, no currency symbol — e.g. "350 000". */
+export function formatNumber(amount: number, code: string): string {
   const fractionDigits = ZERO_DECIMAL.has(code) ? 0 : 2;
   const n = Number.isFinite(amount) ? amount : 0;
-  const formatted = new Intl.NumberFormat("fr-FR", {
+  return new Intl.NumberFormat("fr-FR", {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(n);
-  return `${formatted} ${currencySymbol(code)}`;
+}
+
+export function formatMoney(amount: number, code: string): string {
+  return `${formatNumber(amount, code)} ${currencySymbol(code)}`;
 }
 
 export function computeTotals(doc: EFactDocument): EFactTotals {

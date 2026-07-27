@@ -14,6 +14,7 @@ import {
   currencySymbol,
   formatDate,
   formatMoney,
+  formatNumber,
 } from "./types";
 
 /** Slightly darken a hex colour for gradients/borders without a colour lib. */
@@ -261,8 +262,14 @@ function ReceiptDocument({ doc }: { doc: EFactDocument }) {
         <p className="text-xs font-semibold uppercase tracking-wider text-white/80">
           La somme de
         </p>
-        <p className="mt-1 text-3xl font-black tabular-nums">
-          {formatMoney(doc.amountReceived, doc.currency)}
+        <p className="mt-1 flex flex-wrap items-baseline text-3xl font-black tabular-nums">
+          <span>{formatNumber(doc.amountReceived, doc.currency)}</span>
+          <span
+            className="text-xl font-bold text-white/90"
+            style={{ marginLeft: "0.6em" }}
+          >
+            {currencySymbol(doc.currency)}
+          </span>
         </p>
         <p className="mt-2 text-sm text-white/90">
           <span className="text-white/70">Montant en lettres : </span>
