@@ -98,12 +98,29 @@ export function buildSystemPrompt(options: {
   const productsBlock = productSel.shown.length
     ? `${productsHeader}\n${productSel.shown
         .map((p) => {
+          const ref = p.sku ? ` (réf. ${p.sku})` : "";
           const price = p.price != null ? `\n  Prix : ${p.price} ${p.currency}` : "";
+          const meta = [p.category && `Catégorie : ${p.category}`, p.brand && `Marque : ${p.brand}`]
+            .filter(Boolean)
+            .join(" · ");
+          const stock =
+            p.in_stock === false
+              ? "\n  Stock : RUPTURE — ne propose pas comme disponible, propose une alternative ou une commande."
+              : p.stock_quantity != null
+                ? `\n  Stock : ${p.stock_quantity} disponible(s)`
+                : p.in_stock
+                  ? "\n  Stock : disponible"
+                  : "";
           const desc = p.description ? `\n  Description : ${p.description}` : "";
+          const attrs = Object.entries(p.attributes ?? {});
+          const details = attrs.length
+            ? `\n  Détails : ${attrs.map(([k, v]) => `${k}: ${v}`).join(" ; ")}`
+            : "";
+          const link = p.product_url ? `\n  Lien : ${p.product_url}` : "";
           const imgs = p.images.length > 0
             ? `\n  Photos (à mettre dans media[]) : ${p.images.slice(0, 3).join(" | ")}`
             : "";
-          return `• ${p.name}${price}${desc}${imgs}`;
+          return `• ${p.name}${ref}${meta ? `\n  ${meta}` : ""}${price}${stock}${desc}${details}${link}${imgs}`;
         })
         .join("\n")}${
         productSel.otherNames.length

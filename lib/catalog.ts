@@ -118,15 +118,22 @@ function scoreProduct(product: Product, queryTokens: string[]): number {
   if (!queryTokens.length) return 0;
   const nameTokens = new Set(tokenize(product.name));
   const nameNorm = normalizeText(product.name);
-  const descTokens = new Set(tokenize(product.description ?? ""));
+  // SKU/reference and brand are as decisive as the name for API catalogs.
+  const refTokens = new Set(tokenize(`${product.sku ?? ""} ${product.brand ?? ""}`));
+  const categoryTokens = new Set(tokenize(product.category ?? ""));
+  const descTokens = new Set(
+    tokenize(`${product.description ?? ""} ${Object.values(product.attributes ?? {}).join(" ")}`),
+  );
 
   let score = 0;
   for (const q of queryTokens) {
     const numeric = /^\d+$/.test(q);
-    if (nameTokens.has(q)) {
+    if (nameTokens.has(q) || refTokens.has(q)) {
       score += numeric ? 6 : 3; // exact reference in the name is decisive
     } else if (!numeric && q.length >= 3 && nameNorm.includes(q)) {
       score += 2; // partial/substring match in the name
+    } else if (categoryTokens.has(q)) {
+      score += 2; // "moteur", "freinage"…
     } else if (descTokens.has(q)) {
       score += 1; // weak signal from the description
     }

@@ -23,6 +23,8 @@ import type {
   Message,
   Note,
   Product,
+  ProductSource,
+  ProductSourceView,
 } from "@/lib/types";
 
 /** Default agent settings (used until a row exists in Supabase). */
@@ -148,6 +150,27 @@ export async function getProducts(): Promise<Product[]> {
     .eq("agent_id", agentId)
     .order("created_at", { ascending: false });
   return (data as unknown as Product[]) ?? [];
+}
+
+/** Product API sources of the active agent, without their encrypted keys. */
+export async function getProductSources(): Promise<ProductSourceView[]> {
+  if (usingMockData) return [];
+  const agentId = await getActiveAgentId();
+  if (!agentId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("product_sources")
+    .select("*")
+    .eq("agent_id", agentId)
+    .order("created_at", { ascending: true });
+  return ((data as ProductSource[] | null) ?? []).map((source) => {
+    const view: ProductSourceView & { api_key_encrypted?: string | null } = {
+      ...source,
+      has_api_key: Boolean(source.api_key_encrypted),
+    };
+    delete view.api_key_encrypted;
+    return view;
+  });
 }
 
 /** E_Fact archive for the current org — lightweight rows (no `payload`). */

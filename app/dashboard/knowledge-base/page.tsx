@@ -3,17 +3,18 @@ import { KnowledgeManager } from "@/components/knowledge/knowledge-manager";
 import { KnowledgeFilesTab } from "@/components/knowledge/knowledge-files-tab";
 import { ProductsTab } from "@/components/products/products-tab";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { getKnowledge, getKnowledgeFiles, getProducts, usingMockData } from "@/lib/data";
+import { getKnowledge, getKnowledgeFiles, getProducts, getProductSources, usingMockData } from "@/lib/data";
 import { getOrgAgents, getActiveAgentId } from "@/lib/agents";
 import { BookOpen, FileStack, ShoppingBag } from "lucide-react";
 
 export const metadata = { title: "Base de connaissance" };
 
 export default async function KnowledgeBasePage() {
-  const [entries, files, products, agents, activeAgentId] = await Promise.all([
+  const [entries, files, products, sources, agents, activeAgentId] = await Promise.all([
     getKnowledge(),
     getKnowledgeFiles(),
     getProducts(),
+    getProductSources(),
     usingMockData ? Promise.resolve([]) : getOrgAgents(),
     usingMockData ? Promise.resolve(null) : getActiveAgentId(),
   ]);
@@ -73,6 +74,7 @@ export default async function KnowledgeBasePage() {
         <TabsContent value="products">
           <ProductsTab
             products={products}
+            sources={sources}
             agents={agentOptions}
             activeAgentId={activeAgentId}
           />

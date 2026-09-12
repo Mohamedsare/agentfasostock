@@ -656,12 +656,20 @@ async function getActiveKnowledgeFiles(db: Db, agentId: string): Promise<Knowled
 }
 
 async function getActiveProducts(db: Db, agentId: string): Promise<Product[]> {
-  const { data } = await db
-    .from("products")
-    .select("*")
-    .eq("agent_id", agentId)
-    .eq("is_active", true);
-  return (data as Product[]) ?? [];
+  // Page past PostgREST's 1000-row cap: API-synced catalogs can be large.
+  const products: Product[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data } = await db
+      .from("products")
+      .select("*")
+      .eq("agent_id", agentId)
+      .eq("is_active", true)
+      .order("id")
+      .range(from, from + 999);
+    products.push(...((data as Product[]) ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return products;
 }
 
 /**

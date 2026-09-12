@@ -169,7 +169,65 @@ export interface Product {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /** "manual" (entered in the dashboard) or "api" (synced from a ProductSource). */
+  source?: "manual" | "api";
+  source_id?: string | null;
+  external_id?: string | null;
+  sku?: string | null;
+  category?: string | null;
+  brand?: string | null;
+  stock_quantity?: number | null;
+  in_stock?: boolean | null;
+  product_url?: string | null;
+  /** Extra details from the API (compatibility, dimensions…) kept as flat key/values. */
+  attributes?: Record<string, string | number | boolean>;
+  synced_at?: string | null;
 }
+
+export type ProductSourceAuthType = "none" | "bearer" | "header" | "query";
+
+/** JSON paths (dot notation) mapping the API payload to product fields. Empty = auto-detect. */
+export interface ProductFieldMapping {
+  items?: string;
+  id?: string;
+  name?: string;
+  description?: string;
+  price?: string;
+  currency?: string;
+  images?: string;
+  sku?: string;
+  category?: string;
+  brand?: string;
+  stock?: string;
+  in_stock?: string;
+  url?: string;
+}
+
+export interface ProductSource {
+  id: string;
+  agent_id: string;
+  name: string;
+  base_url: string;
+  auth_type: ProductSourceAuthType;
+  auth_key_name: string | null;
+  /** Never sent to the client — see ProductSourceView. */
+  api_key_encrypted: string | null;
+  default_query: string | null;
+  per_page: number;
+  field_mapping: ProductFieldMapping;
+  sync_interval_minutes: number;
+  is_active: boolean;
+  last_sync_at: string | null;
+  last_full_sync_at: string | null;
+  last_sync_status: "success" | "error" | "running" | null;
+  last_sync_error: string | null;
+  last_sync_count: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Client-safe view of a source: the encrypted key is replaced by a flag. */
+export type ProductSourceView = Omit<ProductSource, "api_key_encrypted"> & { has_api_key: boolean };
 
 export interface AgentSettings {
   id: string;

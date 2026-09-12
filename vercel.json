@@ -3,6 +3,10 @@
     {
       "path": "/api/follow-ups/run",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/products/sync",
+      "schedule": "30 * * * *"
     }
   ]
 }

@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, Trash2, Loader2, ShoppingBag, PackageOpen } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, ShoppingBag, PackageOpen, Plug, Search } from "lucide-react";
+import { ProductSourcesPanel } from "@/components/products/product-sources-panel";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { createProduct, updateProduct, deleteProduct, toggleProduct } from "@/lib/actions/products";
@@ -29,9 +30,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { Product } from "@/lib/types";
+import type { Product, ProductSourceView } from "@/lib/types";
 
 const MAX_IMAGES = 6;
+const PAGE_SIZE = 60;
 const CURRENCIES = ["XOF", "EUR", "USD", "MAD", "GNF", "XAF"];
 
 interface AgentOption { id: string; name: string }
@@ -57,13 +59,24 @@ function formatPrice(price: number | null, currency: string) {
 
 export function ProductsTab({
   products,
+  sources,
   agents,
   activeAgentId,
 }: {
   products: Product[];
+  sources: ProductSourceView[];
   agents: AgentOption[];
   activeAgentId: string | null;
 }) {
+  const [search, setSearch] = React.useState("");
+  const [visible, setVisible] = React.useState(PAGE_SIZE);
+  const filtered = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((p) =>
+      [p.name, p.sku, p.category, p.brand].some((v) => v?.toLowerCase().includes(q)),
+    );
+  }, [products, search]);
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
   const [uploading, setUploading] = React.useState(false);
@@ -167,13 +180,29 @@ export function ProductsTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <ProductSourcesPanel sources={sources} agents={agents} activeAgentId={activeAgentId} />
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {products.length} produit{products.length !== 1 ? "s" : ""} — catalogue consultable par l&apos;agent IA
         </p>
-        <Button onClick={openCreate} disabled={agents.length === 0}>
-          <Plus className="size-4" /> Ajouter un produit
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {products.length > PAGE_SIZE / 4 && (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="w-56 pl-8"
+                placeholder="Nom, réf., catégorie…"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setVisible(PAGE_SIZE); }}
+                aria-label="Rechercher un produit"
+              />
+            </div>
+          )}
+          <Button onClick={openCreate} disabled={agents.length === 0}>
+            <Plus className="size-4" /> Ajouter un produit
+          </Button>
+        </div>
       </div>
 
       {products.length === 0 ? (
@@ -186,7 +215,9 @@ export function ProductsTab({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {products.map((p) => (
+          {filtered.slice(0, visible).map((p) => {
+            const fromApi = p.source === "api";
+            return (
             <Card key={p.id} className={cn("overflow-hidden", !p.is_active && "opacity-60")}>
               {/* Images */}
               {p.images.length > 0 ? (
@@ -211,31 +242,55 @@ export function ProductsTab({
 
               <div className="p-4">
                 <div className="mb-1 flex items-start justify-between gap-2">
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-semibold leading-tight">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">{agentName(p.agent_id)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[p.sku && `Réf. ${p.sku}`, p.category, agentName(p.agent_id)].filter(Boolean).join(" · ")}
+                    </p>
                   </div>
-                  <Switch checked={p.is_active} onCheckedChange={() => toggle(p)} aria-label="Activer" />
+                  {/* API products are managed by their source (sync owns is_active). */}
+                  {!fromApi && (
+                    <Switch checked={p.is_active} onCheckedChange={() => toggle(p)} aria-label="Activer" />
+                  )}
                 </div>
-                {p.price != null && (
-                  <Badge tone="success" className="mb-2">
-                    {formatPrice(p.price, p.currency)}
-                  </Badge>
-                )}
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {p.price != null && (
+                    <Badge tone="success">{formatPrice(p.price, p.currency)}</Badge>
+                  )}
+                  {p.in_stock === false ? (
+                    <Badge tone="danger">Rupture</Badge>
+                  ) : p.stock_quantity != null ? (
+                    <Badge tone="neutral">Stock : {p.stock_quantity}</Badge>
+                  ) : null}
+                  {fromApi && (
+                    <Badge tone="info"><Plug className="size-3" /> API</Badge>
+                  )}
+                </div>
                 {p.description && (
                   <p className="line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
                 )}
-                <div className="mt-3 flex justify-end gap-1">
-                  <Button size="icon" variant="ghost" onClick={() => openEdit(p)} disabled={pending}>
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(p)} disabled={pending}>
-                    <Trash2 className="size-4" />
-                  </Button>
-                </div>
+                {!fromApi && (
+                  <div className="mt-3 flex justify-end gap-1">
+                    <Button size="icon" variant="ghost" onClick={() => openEdit(p)} disabled={pending} aria-label="Modifier">
+                      <Pencil className="size-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(p)} disabled={pending} aria-label="Supprimer">
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
             </Card>
-          ))}
+            );
+          })}
+        </div>
+      )}
+
+      {filtered.length > visible && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => setVisible((v) => v + PAGE_SIZE)}>
+            Afficher plus ({filtered.length - visible} restants)
+          </Button>
         </div>
       )}
 
