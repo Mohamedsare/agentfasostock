@@ -206,6 +206,15 @@ export async function handleInboundMessage(
     openaiKey: ctx.openaiKey,
   });
 
+  // The LLM call failed and a canned reply is being used: keep the exact reason
+  // in audit_logs so production failures are diagnosable without server logs.
+  if (result.fallback_reason) {
+    await logAudit(db, agentId, "ai", "ai_generation_failed", conversation.id, {
+      reason: result.fallback_reason,
+      preview: resolved.text.slice(0, 100),
+    });
+  }
+
   await applyAgentResult(db, { conversation, contact, result, history, ctx });
 
   // On a silent handoff (qualified/hot lead, or explicit human request) we

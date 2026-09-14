@@ -438,6 +438,8 @@ export interface AgentResult {
   media?: AgentMediaAttachment[];
   /** Facts learned in this turn — saved to the contacts table immediately. */
   extracted_contact?: ExtractedContact;
+  /** Set only when the LLM call failed and a canned fallback reply was used — why. */
+  fallback_reason?: string;
 }
 
 /** Conversation joined with its contact — convenient for list/detail views. */

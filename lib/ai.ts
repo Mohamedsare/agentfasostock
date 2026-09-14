@@ -11,6 +11,7 @@ import {
   renderProductDetail,
   searchProducts,
   summarizeCategories,
+  tokenize,
 } from "@/lib/catalog";
 import type {
   AgentMediaAttachment,
@@ -55,7 +56,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
 
   const apiKey = options.openaiKey || serverEnv.platformOpenaiApiKey;
   if (!apiKey) {
-    return fallbackResult(options, heuristic.score);
+    return fallbackResult(options, heuristic.score, "no_openai_key");
   }
   const client = new OpenAI({ apiKey, baseURL: serverEnv.openaiBaseUrl });
   // Large catalogs only show the best matches in the prompt — give the model a
@@ -115,7 +116,11 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     if (!parsed.success) {
       console.error("[ai] schema validation failed — using fallback. Issues:", JSON.stringify(parsed.error.issues));
       console.error("[ai] raw LLM output was:", raw.slice(0, 500));
-      return fallbackResult(options, heuristic.score);
+      return fallbackResult(
+        options,
+        heuristic.score,
+        `schema_validation_failed: ${JSON.stringify(parsed.error.issues).slice(0, 300)} | raw: ${raw.slice(0, 300)}`,
+      );
     }
 
     // Normalise nullish fields from LLM (null → undefined) → clean AgentResult shape.
@@ -138,7 +143,10 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
     // Then drop any media URL the model invented — only real catalog/document files go out.
-    const grounded = ensureRequestedPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options);
+    const grounded = limitMediaToRequest(
+      ensureRequestedPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options),
+      options,
+    );
     // Guarantee WhatsApp syntax (*gras*, one list item per line) whatever the model produced.
     const sanitized = { ...grounded, reply: formatWhatsAppReply(grounded.reply) };
 
@@ -158,7 +166,8 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     };
   } catch (error) {
     console.error("[ai] generation failed, using fallback:", error);
-    return fallbackResult(options, heuristic.score);
+    const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    return fallbackResult(options, heuristic.score, reason.slice(0, 600));
   }
 }
 
@@ -262,6 +271,44 @@ function keepGroundedMedia(data: AgentResult, options: GenerateOptions): AgentRe
   return { ...data, media: media.length ? media : undefined };
 }
 
+/** WhatsApp attachments per reply (also enforced in lib/engine.ts). */
+const MAX_MEDIA = 3;
+
+/**
+ * Focus photos on what the client asked for, max 3. "photo bougie sirius" →
+ * the bougies, not the châteaux the reply also lists; completed with the other
+ * matching catalog products named in the reply. Documents/videos are kept.
+ */
+function limitMediaToRequest(data: AgentResult, options: GenerateOptions): AgentResult {
+  if (!data.media?.length) return data;
+  const lastUser = [...options.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const requestTokens = new Set(tokenize(lastUser));
+  const relevance = (text: string) => tokenize(text).filter((t) => requestTokens.has(t)).length;
+
+  const others = data.media.filter((m) => m.type !== "image");
+  const proposed = data.media.filter((m) => m.type === "image");
+
+  // Candidates = photos the model attached + photos of every catalog product the
+  // reply names. The best match to the request wins, whoever proposed it — the
+  // model may attach a château while the client asked for the bougie it also listed.
+  const reply = normalizeText(data.reply ?? "");
+  const named = reply
+    ? (options.products ?? [])
+        .filter((p) => p.is_active && p.images.length > 0 && reply.includes(normalizeText(p.name)))
+        .map((p) => ({ type: "image" as const, url: p.images[0], caption: p.name }))
+    : [];
+  const candidates = [...proposed, ...named.filter((n) => !proposed.some((m) => m.url === n.url))];
+  const score = (m: AgentMediaAttachment) => relevance(m.caption ?? "");
+  const best = Math.max(0, ...candidates.map(score));
+  const kept = best > 0 ? candidates.filter((m) => score(m) === best) : proposed;
+
+  const media = [...others, ...kept].slice(0, MAX_MEDIA);
+  if (media.length !== data.media.length || media.some((m, i) => m.url !== data.media?.[i]?.url)) {
+    console.info(`[ai] media focused on the request: ${data.media.length} proposed → ${media.length} kept`);
+  }
+  return { ...data, media: media.length ? media : undefined };
+}
+
 /** The client explicitly asks to see something. */
 const PHOTO_REQUEST = /\b(photos?|images?|pics?|visuels?|montre[rz]?|ressemble)\b/i;
 
@@ -279,8 +326,15 @@ function ensureRequestedPhotos(data: AgentResult, options: GenerateOptions): Age
     .filter((p) => p.is_active && p.images.length > 0 && reply.includes(normalizeText(p.name)))
     // Longest names first, so "BOUGIE SIRIUS NANO" doesn't also pull in "BOUGIE SIRIUS".
     .sort((a, b) => b.name.length - a.name.length);
+  // Prefer the products matching what was asked ("photo bougie sirius" → the
+  // bougies, not the châteaux also listed in the reply).
+  const requestTokens = new Set(tokenize(lastUser));
+  const overlap = (p: Product) => tokenize(p.name).filter((t) => requestTokens.has(t)).length;
+  const best = Math.max(0, ...named.map(overlap));
+  const relevant = best > 0 ? named.filter((p) => overlap(p) === best) : named;
+
   const chosen: Product[] = [];
-  for (const p of named) {
+  for (const p of relevant) {
     const n = normalizeText(p.name);
     if (chosen.some((c) => normalizeText(c.name).includes(n))) continue;
     chosen.push(p);
@@ -356,7 +410,7 @@ function extractMarkdownImages(data: AgentResult): AgentResult {
 }
 
 /** Deterministic response used when the LLM is unavailable. */
-function fallbackResult(options: GenerateOptions, score: number): AgentResult {
+function fallbackResult(options: GenerateOptions, score: number, reason: string): AgentResult {
   const result = scoreConversation(
     options.messages.filter((m) => m.role === "user").map((m) => m.content).join("\n"),
     score,
@@ -378,6 +432,7 @@ function fallbackResult(options: GenerateOptions, score: number): AgentResult {
         ? "Planifier un appel / une démonstration."
         : "Continuer la qualification.",
     should_notify_admin: shouldNotifyAdmin(result.status),
+    fallback_reason: reason,
   };
 }
 

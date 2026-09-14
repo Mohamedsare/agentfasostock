@@ -56,6 +56,13 @@ export function formatWhatsAppReply(input: string): string {
     })
     .join("\n");
 
+  // No blank lines between the items of one list.
+  const LIST_GAP = /(\n(?:\d{1,2}[.)]|[•▪◦-])\s[^\n]*)\n[ \t]*\n(?=(?:\d{1,2}[.)]|[•▪◦-])\s)/g;
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(LIST_GAP, "$1\n");
+  }
+
   // Whitespace hygiene.
   text = text
     .replace(/[ \t]+\n/g, "\n")

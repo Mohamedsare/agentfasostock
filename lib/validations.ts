@@ -34,14 +34,27 @@ const extractedContactSchema = z.object({
 /** Structured AI output (CLAUDE.md §25). */
 export const agentResultSchema = z.object({
   reply: z.string().default(""),
-  intent: intentSchema.default("other"),
-  status: leadStatusSchema.default("nouveau"),
-  score: z.number().min(0).max(100).default(0),
-  summary: z.string().default(""),
-  next_action: z.string().default(""),
-  should_notify_admin: z.boolean().default(false),
-  media: z.array(mediaAttachmentSchema).max(3).nullish(),
-  extracted_contact: extractedContactSchema,
+  // Tolerant on purpose: one imperfect field must never throw away the whole
+  // reply (a failed parse = canned "Je vérifie ça pour vous…" and no photo sent).
+  intent: intentSchema.catch("other"),
+  status: leadStatusSchema.catch("nouveau"),
+  score: z.number().catch(0).transform((n) => Math.max(0, Math.min(100, n))),
+  summary: z.string().catch(""),
+  next_action: z.string().catch(""),
+  should_notify_admin: z.boolean().catch(false),
+  // The model sometimes attaches more than 3 photos or a malformed item: keep
+  // the valid ones (lib/ai.ts then keeps the 3 most relevant).
+  media: z
+    .array(z.unknown())
+    .nullish()
+    .catch(null)
+    .transform((items) =>
+      items
+        ?.map((item) => mediaAttachmentSchema.safeParse(item))
+        .flatMap((r) => (r.success ? [r.data] : []))
+        .slice(0, 10),
+    ),
+  extracted_contact: extractedContactSchema.catch(null),
 });
 
 /** Body for POST /api/agent/respond and /api/labs/simulate. */
