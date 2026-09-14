@@ -4,6 +4,7 @@ import { serverEnv } from "@/lib/env";
 import { buildSystemPrompt, type ConversationMemory } from "@/lib/prompt";
 import { clamp, scoreConversation, statusForScore, shouldNotifyAdmin } from "@/lib/scoring";
 import { agentResultSchema } from "@/lib/validations";
+import { formatWhatsAppReply } from "@/lib/whatsapp-format";
 import {
   FULL_DUMP_MAX_PRODUCTS,
   renderProductDetail,
@@ -136,7 +137,9 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
     // Then drop any media URL the model invented — only real catalog/document files go out.
-    const sanitized = keepGroundedMedia(extractMarkdownImages(normalised), options);
+    const grounded = keepGroundedMedia(extractMarkdownImages(normalised), options);
+    // Guarantee WhatsApp syntax (*gras*, one list item per line) whatever the model produced.
+    const sanitized = { ...grounded, reply: formatWhatsAppReply(grounded.reply) };
 
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.

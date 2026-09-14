@@ -50,6 +50,7 @@ import {
   type ActionResult,
 } from "@/lib/actions/conversations";
 import type { ConversationWithContact, LeadStatus, Message, Note } from "@/lib/types";
+import { WhatsAppText } from "@/components/ui/whatsapp-text";
 
 export function ConversationDetail({
   conversation,
@@ -376,7 +377,7 @@ function MessageBubble({ message }: { message: Message }) {
                 : "rounded-br-sm bg-primary text-primary-foreground",
           )}
         >
-          {message.content}
+          <WhatsAppText text={message.content} />
         </div>
         <p className={cn("px-1 text-[11px] text-muted-foreground", isInbound ? "text-left" : "text-right")}>
           {formatDateTime(message.created_at)}

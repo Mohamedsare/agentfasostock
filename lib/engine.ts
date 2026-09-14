@@ -15,6 +15,7 @@ import {
   type WasenderCreds,
 } from "@/lib/wasender";
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
+import { stripWhatsAppFormatting } from "@/lib/whatsapp-format";
 import { isPersonalMessage, scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { classifyProspect } from "@/lib/classifier";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
@@ -499,7 +500,8 @@ async function deliverReply(
 ): Promise<{ sent: SendResult; byVoice: boolean }> {
   const creds = credsOf(ctx);
   if (asVoice) {
-    const speech = await synthesizeSpeech(reply, ctx.openaiKey);
+    // Formatting marks (*gras*, "• ") would be read aloud.
+    const speech = await synthesizeSpeech(stripWhatsAppFormatting(reply), ctx.openaiKey);
     if (speech) {
       const uploaded = await uploadMediaToWasender(speech.bytes, speech.mimetype, creds);
       if (uploaded.ok && uploaded.url) {

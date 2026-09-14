@@ -370,9 +370,10 @@ export function formatMoney(amount: number, currency: string): string {
 
 /** Full product sheet as injected in the prompt and returned by the search tool. */
 export function renderProductDetail(p: Product): string {
-  const lines = [`• ${p.name}${p.sku ? ` (réf. ${p.sku})` : ""}`];
+  const lines = [`• ${p.name}`];
   const meta = [p.category && `Catégorie : ${p.category}`, p.brand && `Marque : ${p.brand}`].filter(Boolean).join(" · ");
   if (meta) lines.push(`  ${meta}`);
+  if (p.sku) lines.push(`  Référence : ${p.sku} (à citer uniquement si le client la demande)`);
   lines.push(
     p.price != null
       ? `  Prix : ${formatMoney(p.price, p.currency)}`
@@ -396,8 +397,8 @@ export function renderProductDetail(p: Product): string {
   if (p.product_url) lines.push(`  Lien : ${p.product_url}`);
   lines.push(
     p.images.length
-      ? `  Photos (à mettre dans media[]) : ${p.images.slice(0, 3).join(" | ")}`
-      : "  Photos : aucune",
+      ? `  URL photos (uniquement pour media[], jamais dans reply) : ${p.images.slice(0, 3).join(" | ")}`
+      : "  (pas de photo disponible pour ce produit)",
   );
   return lines.join("\n");
 }

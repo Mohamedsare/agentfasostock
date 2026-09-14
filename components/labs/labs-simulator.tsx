@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { LEAD_STATUS_META } from "@/lib/constants";
 import { toast } from "sonner";
 import type { AgentResult, AgentTone } from "@/lib/types";
+import { WhatsAppText } from "@/components/ui/whatsapp-text";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -213,7 +214,7 @@ export function LabsSimulator({
                       : "rounded-bl-sm bg-card text-card-foreground",
                   )}
                 >
-                  {m.content}
+                  <WhatsAppText text={m.content} />
                 </div>
                 {m.role === "user" && (
                   <span className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-secondary-foreground">

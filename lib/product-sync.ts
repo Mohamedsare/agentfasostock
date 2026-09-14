@@ -45,7 +45,8 @@ const AUTO_FIELDS: Record<Exclude<keyof ProductFieldMapping, "items">, string[]>
   price: ["price", "prix", "sale_price", "unit_price", "amount", "selling_price"],
   currency: ["currency", "devise", "currency_code"],
   images: ["images", "image_urls", "photos", "gallery", "pictures", "image", "image_url", "thumbnail", "photo", "cover"],
-  sku: ["sku", "reference", "ref", "code", "barcode"],
+  // Not "barcode"/"code": internal barcodes (e.g. FasoStock "FS-…") mean nothing to a client.
+  sku: ["sku", "reference", "ref"],
   category: ["category", "categorie", "category_name", "categories", "type"],
   brand: ["brand", "marque", "manufacturer"],
   stock: ["stock", "stock_quantity", "quantity", "qty", "inventory", "quantite"],
@@ -59,6 +60,7 @@ const ITEM_ENVELOPES = ["data", "items", "products", "results", "records", "rows
 const ATTRIBUTE_BLACKLIST = new Set([
   ...Object.values(AUTO_FIELDS).flat(),
   "created_at", "updated_at", "deleted_at", "createdAt", "updatedAt",
+  "barcode", "code", "ean", "gtin", "sale_price",
 ]);
 
 export interface NormalizedProduct {
