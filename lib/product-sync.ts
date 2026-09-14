@@ -204,7 +204,12 @@ function extraAttributes(item: Json): Record<string, string | number | boolean> 
   return out;
 }
 
-/** One-line description of a nested object: "Carton de 10 : 500000 (soit 50000/pièce)". */
+/** 500000 → "500 000" (plain spaces: WhatsApp-safe). */
+function groupDigits(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
+/** One-line description of a nested object: "Carton de 10 : 500 000 (soit 50 000/pièce)". */
 function describeObject(o: Record<string, Json>): string | null {
   const label = asText(o.label ?? o.name ?? o.title ?? null);
   const qty = asNumber(o.quantity ?? o.qty ?? null);
@@ -214,8 +219,8 @@ function describeObject(o: Record<string, Json>): string | null {
     return [
       label,
       qty != null ? `de ${qty}` : null,
-      price != null ? `: ${price}` : null,
-      unitPrice != null ? `(soit ${unitPrice}/pièce)` : null,
+      price != null ? `: ${groupDigits(price)}` : null,
+      unitPrice != null ? `(soit ${groupDigits(unitPrice)}/pièce)` : null,
     ]
       .filter(Boolean)
       .join(" ");

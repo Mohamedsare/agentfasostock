@@ -144,12 +144,20 @@ export async function getProducts(): Promise<Product[]> {
   const agentId = await getActiveAgentId();
   if (!agentId) return [];
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("products")
-    .select("*")
-    .eq("agent_id", agentId)
-    .order("created_at", { ascending: false });
-  return (data as unknown as Product[]) ?? [];
+  // Page past PostgREST's 1000-row cap: API-synced catalogs can be large.
+  const products: Product[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data } = await supabase
+      .from("products")
+      .select("*")
+      .eq("agent_id", agentId)
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(from, from + 999);
+    products.push(...((data as unknown as Product[]) ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return products;
 }
 
 /** Product API sources of the active agent, without their encrypted keys. */

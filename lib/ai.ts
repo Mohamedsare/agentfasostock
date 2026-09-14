@@ -4,6 +4,12 @@ import { serverEnv } from "@/lib/env";
 import { buildSystemPrompt, type ConversationMemory } from "@/lib/prompt";
 import { clamp, scoreConversation, statusForScore, shouldNotifyAdmin } from "@/lib/scoring";
 import { agentResultSchema } from "@/lib/validations";
+import {
+  FULL_DUMP_MAX_PRODUCTS,
+  renderProductDetail,
+  searchProducts,
+  summarizeCategories,
+} from "@/lib/catalog";
 import type {
   AgentMediaAttachment,
   AgentResult,
@@ -50,9 +56,14 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     return fallbackResult(options, heuristic.score);
   }
   const client = new OpenAI({ apiKey, baseURL: serverEnv.openaiBaseUrl });
+  // Large catalogs only show the best matches in the prompt — give the model a
+  // search tool so it can look up anything else instead of guessing.
+  const products = options.products ?? [];
+  const useCatalogTool = products.filter((p) => p.is_active).length > FULL_DUMP_MAX_PRODUCTS;
 
   try {
     const systemPrompt = buildSystemPrompt({
+      catalogSearch: useCatalogTool,
       settings: options.settings,
       knowledge: options.knowledge,
       files: options.files,
@@ -65,17 +76,38 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       conversation: options.messages,
     });
 
-    const completion = await client.chat.completions.create({
-      model: serverEnv.openaiModel,
-      temperature: 0.5,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...options.messages,
-      ],
-    });
+    const chatMessages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      ...options.messages,
+    ];
 
-    const raw = completion.choices[0]?.message?.content ?? "{}";
+    let raw = "{}";
+    for (let round = 0; ; round++) {
+      // The last round offers no tools, which forces the final JSON answer.
+      const allowTools = useCatalogTool && round < MAX_TOOL_ROUNDS;
+      const completion = await client.chat.completions.create({
+        model: serverEnv.openaiModel,
+        // Low temperature: product answers must stick to the exact catalog data.
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: chatMessages,
+        ...(allowTools ? { tools: [SEARCH_PRODUCTS_TOOL], tool_choice: "auto" as const } : {}),
+      });
+      const message = completion.choices[0]?.message;
+      const toolCalls = allowTools ? (message?.tool_calls ?? []) : [];
+      if (!message || toolCalls.length === 0) {
+        raw = message?.content ?? "{}";
+        break;
+      }
+      chatMessages.push({ role: "assistant", content: message.content ?? null, tool_calls: toolCalls });
+      for (const call of toolCalls) {
+        const content =
+          call.type === "function" && call.function.name === "search_products"
+            ? runSearchTool(products, call.function.arguments)
+            : "Outil inconnu.";
+        chatMessages.push({ role: "tool", tool_call_id: call.id, content });
+      }
+    }
     const parsed = agentResultSchema.safeParse(JSON.parse(raw));
 
     if (!parsed.success) {
@@ -103,7 +135,8 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
 
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
-    const sanitized = extractMarkdownImages(normalised);
+    // Then drop any media URL the model invented — only real catalog/document files go out.
+    const sanitized = keepGroundedMedia(extractMarkdownImages(normalised), options);
 
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.
@@ -123,6 +156,79 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     console.error("[ai] generation failed, using fallback:", error);
     return fallbackResult(options, heuristic.score);
   }
+}
+
+type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+/** Max search rounds before the model must answer (each round = one LLM call). */
+const MAX_TOOL_ROUNDS = 3;
+
+const SEARCH_PRODUCTS_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "search_products",
+    description:
+      "Recherche dans le catalogue produits COMPLET de l'entreprise (nom, référence, marque, catégorie, description). " +
+      "Utilise-la dès que le produit demandé n'a pas de fiche détaillée dans le prompt, pour une recherche par modèle de moto, " +
+      "marque, catégorie ou budget, pour trouver une alternative en stock, et TOUJOURS avant d'affirmer qu'un produit n'est pas disponible.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Mots-clés : nom de la pièce, référence, modèle (ex. \"albracame 115\", \"kit piston crypton\").",
+        },
+        category: { type: "string", description: "Filtrer par catégorie (optionnel)." },
+        brand: { type: "string", description: "Filtrer par marque (optionnel)." },
+        in_stock_only: { type: "boolean", description: "Uniquement les produits en stock (optionnel)." },
+        max_price: { type: "number", description: "Prix maximum (optionnel)." },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+};
+
+/** Execute a `search_products` call and render results exactly like the prompt's product sheets. */
+function runSearchTool(products: Product[], rawArgs: string): string {
+  let args: { query?: unknown; category?: unknown; brand?: unknown; in_stock_only?: unknown; max_price?: unknown };
+  try {
+    args = JSON.parse(rawArgs || "{}");
+  } catch {
+    return "Arguments invalides : fournis un objet JSON avec au moins \"query\".";
+  }
+  const query = typeof args.query === "string" ? args.query : "";
+  const filters = {
+    category: typeof args.category === "string" && args.category.trim() ? args.category : undefined,
+    brand: typeof args.brand === "string" && args.brand.trim() ? args.brand : undefined,
+    inStockOnly: args.in_stock_only === true,
+    maxPrice: typeof args.max_price === "number" ? args.max_price : undefined,
+  };
+  const results = searchProducts(products, query, filters, 8);
+  console.info(`[ai] search_products "${query}" → ${results.length} result(s)`);
+  if (results.length === 0) {
+    const categories = summarizeCategories(products, 40).map((c) => c.name).join(", ");
+    return (
+      `Aucun produit ne correspond à « ${query} »${filters.category ? ` (catégorie ${filters.category})` : ""}${filters.brand ? ` (marque ${filters.brand})` : ""}. ` +
+      `Catégories existantes : ${categories || "aucune"}. ` +
+      "Réessaie avec d'autres mots-clés (synonyme, référence, modèle, sans filtre) avant de conclure que le produit n'existe pas."
+    );
+  }
+  return `${results.length} résultat(s) pour « ${query} » :\n${results.map(renderProductDetail).join("\n")}`;
+}
+
+/** Keep only media whose URL really exists in the catalog or the knowledge files. */
+function keepGroundedMedia(data: AgentResult, options: GenerateOptions): AgentResult {
+  if (!data.media?.length) return data;
+  const allowed = new Set([
+    ...(options.products ?? []).flatMap((p) => p.images),
+    ...(options.files ?? []).map((f) => f.public_url),
+  ]);
+  const media = data.media.filter((m) => allowed.has(m.url));
+  if (media.length !== data.media.length) {
+    console.warn(`[ai] dropped ${data.media.length - media.length} media URL(s) not found in catalog/documents`);
+  }
+  return { ...data, media: media.length ? media : undefined };
 }
 
 /**

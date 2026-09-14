@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT_SETTINGS } from "@/lib/constants";
 import {
   buildQueryTokens,
+  renderProductDetail,
   selectRelevantKnowledge,
   selectRelevantProducts,
 } from "@/lib/catalog";
@@ -48,6 +49,8 @@ export function buildSystemPrompt(options: {
    * catalog every turn. Omit to fall back to a full dump.
    */
   conversation?: { role: "user" | "assistant"; content: string }[];
+  /** True when the model has the `search_products` tool (large catalogs — see lib/ai.ts). */
+  catalogSearch?: boolean;
 }): string {
   const {
     settings = {},
@@ -58,6 +61,7 @@ export function buildSystemPrompt(options: {
     promptOverride,
     memory,
     conversation = [],
+    catalogSearch = false,
   } = options;
 
   // Retrieve the items relevant to the current ask (small catalogs pass through
@@ -91,44 +95,44 @@ export function buildSystemPrompt(options: {
         .join("\n")}`
     : "";
 
-  const productsHeader = productSel.filtered
-    ? `\n\nCATALOGUE PRODUITS — Voici les articles les plus pertinents pour ce que le client demande (sélectionnés dans un catalogue plus large). Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".`
-    : `\n\nCATALOGUE PRODUITS — Si le client demande un produit, sa photo, son prix ou des infos : réponds IMMÉDIATEMENT avec les données ci-dessous. Mets l'URL image dans "media" (type "image"), pas dans "reply".`;
-
-  const productsBlock = productSel.shown.length
-    ? `${productsHeader}\n${productSel.shown
-        .map((p) => {
-          const ref = p.sku ? ` (réf. ${p.sku})` : "";
-          const price = p.price != null ? `\n  Prix : ${p.price} ${p.currency}` : "";
-          const meta = [p.category && `Catégorie : ${p.category}`, p.brand && `Marque : ${p.brand}`]
-            .filter(Boolean)
-            .join(" · ");
-          const stock =
-            p.in_stock === false
-              ? "\n  Stock : RUPTURE — ne propose pas comme disponible, propose une alternative ou une commande."
-              : p.stock_quantity != null
-                ? `\n  Stock : ${p.stock_quantity} disponible(s)`
-                : p.in_stock
-                  ? "\n  Stock : disponible"
-                  : "";
-          const desc = p.description ? `\n  Description : ${p.description}` : "";
-          const attrs = Object.entries(p.attributes ?? {});
-          const details = attrs.length
-            ? `\n  Détails : ${attrs.map(([k, v]) => `${k}: ${v}`).join(" ; ")}`
-            : "";
-          const link = p.product_url ? `\n  Lien : ${p.product_url}` : "";
-          const imgs = p.images.length > 0
-            ? `\n  Photos (à mettre dans media[]) : ${p.images.slice(0, 3).join(" | ")}`
-            : "";
-          return `• ${p.name}${ref}${meta ? `\n  ${meta}` : ""}${price}${stock}${desc}${details}${link}${imgs}`;
-        })
-        .join("\n")}${
+  const productsBlock = productSel.totalActive
+    ? [
+        `\n\nCATALOGUE PRODUITS (${productSel.totalActive} produit${productSel.totalActive > 1 ? "s" : ""} actif${productSel.totalActive > 1 ? "s" : ""}) — ta SEULE source pour les prix, stocks, références, conditionnements et photos.`,
+        catalogSearch
+          ? `Seuls les produits les plus pertinents pour la demande en cours ont une fiche ci-dessous. Pour TOUT autre produit (autre référence, modèle de moto, marque, catégorie, alternative en stock), appelle l'outil search_products AVANT de répondre. N'affirme jamais qu'un produit est indisponible ou inexistant sans l'avoir cherché, avec au moins 2 formulations différentes.`
+          : "",
+        productSel.shown.length
+          ? `\nFICHES PRODUITS${productSel.filtered ? " (sélection pertinente pour la demande en cours)" : ""} :\n${productSel.shown.map(renderProductDetail).join("\n")}`
+          : productSel.filtered
+            ? "\nFICHES PRODUITS : aucune correspondance directe avec les derniers messages — utilise search_products dès que le client évoque un produit."
+            : "",
+        productSel.categories.length
+          ? `\nAPERÇU DU CATALOGUE PAR CATÉGORIE (pour savoir ce que l'entreprise vend — aucun prix ici, obtiens les fiches avec search_products) :\n${productSel.categories
+              .map((c) => `• ${c.name} (${c.count}) — ex. ${c.examples.join(", ")}`)
+              .join("\n")}`
+          : "",
         productSel.otherNames.length
-          ? `\n\nAUTRES PRODUITS DISPONIBLES (noms seuls — ces articles existent aussi au catalogue). Sers-t'en pour savoir ce que l'entreprise propose : si le client s'y intéresse, confirme la disponibilité et propose-les. Ne dis JAMAIS qu'un de ces produits n'existe pas. Leurs prix et photos apparaîtront en détail quand le client les cible précisément :\n${productSel.otherNames
+          ? `\nAUTRES PRODUITS AU CATALOGUE (noms seuls — ils existent bien ; pour leur prix, stock ou photo, appelle search_products) :\n${productSel.otherNames
               .map((n) => `• ${n}`)
               .join("\n")}`
-          : ""
-      }`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+
+  const productRules = productSel.totalActive
+    ? `
+- PRODUITS — PRÉCISION ABSOLUE :
+  • Cherche dans les FICHES PRODUITS${catalogSearch ? " puis, si besoin, avec search_products" : ""} et réponds IMMÉDIATEMENT à la demande. Jamais de reprise humaine pour une question produit, prix ou photo.
+  • Prix, stock, référence, conditionnement : recopie EXACTEMENT la fiche. Jamais d'estimation, d'arrondi ni de prix inventé. Écris les prix comme la fiche (ex. "17 500 FCFA").
+  • Désigne le produit par son nom exact tel qu'il figure dans la fiche.
+  • Plusieurs produits correspondent (variantes, cylindrées, marques) → cite les 2-3 plus proches avec leur prix, ou pose UNE question pour préciser (modèle de moto, référence).
+  • Produit en RUPTURE → dis-le simplement et propose une alternative disponible trouvée dans les fiches.
+  • Prix "non renseigné" → ne donne aucun prix, propose de vérifier.
+  • Achat en quantité / en gros → propose le conditionnement de la fiche (ex. carton) avec son prix.
+  • Photo demandée → mets l'URL de la fiche dans "media". Si la fiche indique "Photos : aucune", dis-le poliment et décris le produit.
+  • Produit réellement introuvable${catalogSearch ? " après recherche" : ""} → dis-le honnêtement et propose le produit ou la catégorie la plus proche.`
     : "";
 
   const memoryBlock = buildMemoryBlock(memory);
@@ -155,7 +159,7 @@ RÈGLES NON NÉGOCIABLES :
 - PRIORITÉ ABSOLUE : réponds toujours à la demande immédiate du client AVANT de poser une question.
 - N'invente JAMAIS un prix, un délai, une disponibilité ou une fonctionnalité.
 - MÉMOIRE : lis l'historique ET la mémoire avant de répondre. Ne redemande JAMAIS ce qui est déjà connu.
-- PRODUITS ET PHOTOS : si le client demande un produit, une photo, un prix ou des infos sur un article → cherche dans le CATALOGUE ci-dessus et réponds IMMÉDIATEMENT. Ne fais JAMAIS de reprise humaine pour une demande de photo ou d'info produit — tu as le catalogue, utilise-le. Si le produit n'est pas dans le catalogue, dis-le clairement et propose d'autres produits disponibles.
+- PRODUITS ET PHOTOS : si le client demande un produit, une photo, un prix ou des infos sur un article → consulte le CATALOGUE et réponds IMMÉDIATEMENT. Ne fais JAMAIS de reprise humaine pour une demande de photo ou d'info produit — tu as le catalogue, utilise-le.${productRules}
 - ESCALADE "humain_requis" UNIQUEMENT pour : demande explicite de parler à quelqu'un, négociation de contrat, réclamation grave, situation que tu ne peux vraiment pas gérer avec les infos disponibles. PAS pour des demandes de photos ou d'infos produits.
 - Contact personnel/familial sans lien commercial → status "exclu", reply "". Sans réponse.
 
