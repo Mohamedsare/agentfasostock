@@ -184,6 +184,34 @@ export interface Product {
   synced_at?: string | null;
 }
 
+export type LearningKind =
+  | "info_entreprise"
+  | "reponse_type"
+  | "objection"
+  | "correction"
+  | "a_eviter"
+  | "bonne_pratique";
+export type LearningStatus = "active" | "pending" | "rejected";
+/** auto = confident lessons apply immediately; review = all need approval; off = no analysis. */
+export type LearningMode = "auto" | "review" | "off";
+
+/** A lesson the agent learned from its own conversations. */
+export interface AgentLearning {
+  id: string;
+  agent_id: string;
+  kind: LearningKind;
+  title: string;
+  content: string;
+  evidence: string | null;
+  confidence: number;
+  status: LearningStatus;
+  source_conversation_ids: string[];
+  occurrences: number;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type ProductSourceAuthType = "none" | "bearer" | "header" | "query";
 
 /** auto = detected from the first response (next_offset/offset → offset, else page). */
@@ -249,6 +277,8 @@ export interface AgentSettings {
   ai_enabled: boolean;
   /** Automatic follow-ups (relances) on/off for this agent. */
   follow_ups_enabled: boolean;
+  /** Self-learning from past conversations (see lib/learning.ts). */
+  learning_mode: LearningMode;
   operating_mode: AgentOperatingMode;
   updated_at: string;
 }

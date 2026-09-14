@@ -4,7 +4,7 @@ import { respondSchema } from "@/lib/validations";
 // Waits on an LLM call; allow more than the 10s default on Vercel.
 export const maxDuration = 30;
 import { generateAgentResult } from "@/lib/ai";
-import { getAgentSettings, getKnowledge, getKnowledgeFiles, getProducts } from "@/lib/data";
+import { getAgentSettings, getKnowledge, getKnowledgeFiles, getLearnings, getProducts } from "@/lib/data";
 
 /**
  * POST /api/labs/simulate
@@ -29,11 +29,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Same catalog + documents as production, so Labs tests reflect real answers.
-  const [settings, knowledge, files, products] = await Promise.all([
+  const [settings, knowledge, files, products, learnings] = await Promise.all([
     getAgentSettings(),
     getKnowledge(),
     getKnowledgeFiles(),
     getProducts(),
+    getLearnings(),
   ]);
 
   try {
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
       knowledge: knowledge.filter((k) => k.is_active),
       files: files.filter((f) => f.is_active),
       products: products.filter((p) => p.is_active),
+      learnings: learnings.filter((l) => l.status === "active"),
       toneOverride: parsed.data.toneOverride,
       promptOverride: parsed.data.systemPromptOverride,
       previousScore: parsed.data.previousScore,

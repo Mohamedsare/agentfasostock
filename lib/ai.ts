@@ -10,10 +10,11 @@ import {
   normalizeText,
   renderProductDetail,
   searchProducts,
+  scoreProductsForQuery,
   summarizeCategories,
-  tokenize,
 } from "@/lib/catalog";
 import type {
+  AgentLearning,
   AgentMediaAttachment,
   AgentResult,
   AgentSettings,
@@ -29,6 +30,8 @@ export interface GenerateOptions {
   knowledge?: KnowledgeBaseEntry[];
   files?: KnowledgeFile[];
   products?: Product[];
+  /** Lessons learned from past conversations (lib/learning.ts). */
+  learnings?: AgentLearning[];
   toneOverride?: AgentTone;
   promptOverride?: string;
   previousScore?: number;
@@ -71,6 +74,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
       knowledge: options.knowledge,
       files: options.files,
       products: options.products,
+      learnings: options.learnings,
       toneOverride: options.toneOverride,
       promptOverride: options.promptOverride,
       memory: options.memory,
@@ -143,10 +147,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
     // Then drop any media URL the model invented — only real catalog/document files go out.
-    const grounded = limitMediaToRequest(
-      ensureRequestedPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options),
-      options,
-    );
+    const grounded = selectProductPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options);
     // Guarantee WhatsApp syntax (*gras*, one list item per line) whatever the model produced.
     const sanitized = { ...grounded, reply: formatWhatsAppReply(grounded.reply) };
 
@@ -183,7 +184,8 @@ const SEARCH_PRODUCTS_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
     description:
       "Recherche dans le catalogue produits COMPLET de l'entreprise (nom, référence, marque, catégorie, description). " +
       "Utilise-la dès que le produit demandé n'a pas de fiche détaillée dans le prompt, pour une recherche par modèle de moto, " +
-      "marque, catégorie ou budget, pour trouver une alternative en stock, et TOUJOURS avant d'affirmer qu'un produit n'est pas disponible.",
+      "marque, catégorie ou budget, pour trouver une alternative en stock, et TOUJOURS avant d'affirmer qu'un produit n'est pas disponible. " +
+      "La recherche tolère les fautes d'orthographe (client et catalogue) ; si rien ne sort, réessaie avec l'orthographe correcte du mot et avec le nom du modèle de moto.",
     parameters: {
       type: "object",
       properties: {
@@ -266,87 +268,93 @@ function keepGroundedMedia(data: AgentResult, options: GenerateOptions): AgentRe
       continue;
     }
     if (media.some((x) => x.url === url)) continue;
-    media.push({ ...m, url, caption: m.caption ?? productByImage.get(url)?.name });
+    // Product photos always carry the exact catalog name (the model leaves it empty or rewrites it).
+    media.push({ ...m, url, caption: productByImage.get(url)?.name ?? (m.caption?.trim() || undefined) });
   }
   return { ...data, media: media.length ? media : undefined };
 }
 
-/** WhatsApp attachments per reply (also enforced in lib/engine.ts). */
-const MAX_MEDIA = 3;
+/** WhatsApp attachments per reply — one photo per model presented (also enforced in lib/engine.ts). */
+const MAX_MEDIA = 4;
 
-/**
- * Focus photos on what the client asked for, max 3. "photo bougie sirius" →
- * the bougies, not the châteaux the reply also lists; completed with the other
- * matching catalog products named in the reply. Documents/videos are kept.
- */
-function limitMediaToRequest(data: AgentResult, options: GenerateOptions): AgentResult {
-  if (!data.media?.length) return data;
-  const lastUser = [...options.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const requestTokens = new Set(tokenize(lastUser));
-  const relevance = (text: string) => tokenize(text).filter((t) => requestTokens.has(t)).length;
-
-  const others = data.media.filter((m) => m.type !== "image");
-  const proposed = data.media.filter((m) => m.type === "image");
-
-  // Candidates = photos the model attached + photos of every catalog product the
-  // reply names. The best match to the request wins, whoever proposed it — the
-  // model may attach a château while the client asked for the bougie it also listed.
-  const reply = normalizeText(data.reply ?? "");
-  const named = reply
-    ? (options.products ?? [])
-        .filter((p) => p.is_active && p.images.length > 0 && reply.includes(normalizeText(p.name)))
-        .map((p) => ({ type: "image" as const, url: p.images[0], caption: p.name }))
-    : [];
-  const candidates = [...proposed, ...named.filter((n) => !proposed.some((m) => m.url === n.url))];
-  const score = (m: AgentMediaAttachment) => relevance(m.caption ?? "");
-  const best = Math.max(0, ...candidates.map(score));
-  const kept = best > 0 ? candidates.filter((m) => score(m) === best) : proposed;
-
-  const media = [...others, ...kept].slice(0, MAX_MEDIA);
-  if (media.length !== data.media.length || media.some((m, i) => m.url !== data.media?.[i]?.url)) {
-    console.info(`[ai] media focused on the request: ${data.media.length} proposed → ${media.length} kept`);
-  }
-  return { ...data, media: media.length ? media : undefined };
-}
+/** A product whose relevance is at least this share of the best match is another model of the same piece. */
+const RELEVANT_PHOTO_RATIO = 0.75;
 
 /** The client explicitly asks to see something. */
-const PHOTO_REQUEST = /\b(photos?|images?|pics?|visuels?|montre[rz]?|ressemble)\b/i;
+const PHOTO_REQUEST = /\b(photos?|images?|pics?|visuels?|montre[rz]?|ressemble|voir)\b/i;
+
+type PhotoCandidate = { media: AgentMediaAttachment; product?: Product; position: number };
 
 /**
- * Safety net: the client asked for a photo, the reply names catalog products
- * that have photos, but the model forgot to attach them → attach them.
+ * Product photos go out automatically: whenever the reply presents catalog
+ * products the client is asking about, their photos are attached — one per
+ * model, max 4 — even if the client never wrote "photo". Relevance uses the
+ * typo-tolerant catalog scoring, so "bouji sirius" picks the bougies, not the
+ * châteaux the reply also lists. Photos already sent in this conversation are
+ * not sent again unless the client asks to see them. Documents/videos are kept.
  */
-function ensureRequestedPhotos(data: AgentResult, options: GenerateOptions): AgentResult {
-  if (data.media?.length || !data.reply) return data;
+function selectProductPhotos(data: AgentResult, options: GenerateOptions): AgentResult {
+  const products = options.products ?? [];
   const lastUser = [...options.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  if (!PHOTO_REQUEST.test(lastUser)) return data;
+  const explicitRequest = PHOTO_REQUEST.test(lastUser);
+  const media = data.media ?? [];
+  const others = media.filter((m) => m.type !== "image");
+  const proposed = media.filter((m) => m.type === "image");
 
-  const reply = normalizeText(data.reply);
-  const named = (options.products ?? [])
-    .filter((p) => p.is_active && p.images.length > 0 && reply.includes(normalizeText(p.name)))
-    // Longest names first, so "BOUGIE SIRIUS NANO" doesn't also pull in "BOUGIE SIRIUS".
-    .sort((a, b) => b.name.length - a.name.length);
-  // Prefer the products matching what was asked ("photo bougie sirius" → the
-  // bougies, not the châteaux also listed in the reply).
-  const requestTokens = new Set(tokenize(lastUser));
-  const overlap = (p: Product) => tokenize(p.name).filter((t) => requestTokens.has(t)).length;
-  const best = Math.max(0, ...named.map(overlap));
-  const relevant = best > 0 ? named.filter((p) => overlap(p) === best) : named;
+  const productByImage = new Map<string, Product>();
+  for (const p of products) for (const img of p.images) productByImage.set(img, p);
 
-  const chosen: Product[] = [];
-  for (const p of relevant) {
-    const n = normalizeText(p.name);
-    if (chosen.some((c) => normalizeText(c.name).includes(n))) continue;
-    chosen.push(p);
-    if (chosen.length === 3) break;
+  // Candidates: photos the model attached + the photo of every catalog product the reply presents.
+  const reply = normalizeText(data.reply ?? "");
+  const candidates: PhotoCandidate[] = proposed.map((m) => ({ media: m, product: productByImage.get(m.url), position: -1 }));
+  if (reply) {
+    for (const p of products) {
+      if (!p.is_active || p.images.length === 0) continue;
+      const position = reply.indexOf(normalizeText(p.name));
+      if (position < 0 || candidates.some((c) => c.product?.id === p.id)) continue;
+      candidates.push({ media: { type: "image", url: p.images[0], caption: p.name }, product: p, position });
+    }
   }
-  if (chosen.length === 0) return data;
 
-  console.info(`[ai] photo requested but none attached — adding ${chosen.length} catalog photo(s)`);
-  return {
-    ...data,
-    media: chosen.map((p) => ({ type: "image" as const, url: p.images[0], caption: p.name })),
-  };
+  // Never resend what the client already received, unless they ask to see it again.
+  const alreadySent = options.messages
+    .filter((m) => m.role === "assistant")
+    .map((m) => m.content)
+    .join("\n");
+  const pool = candidates.filter((c) => explicitRequest || !alreadySent.includes(c.media.url));
+
+  const poolProducts = pool.flatMap((c) => (c.product ? [c.product] : []));
+  let scores = scoreProductsForQuery(products, lastUser, poolProducts);
+  // "je vois pas la photo svp" names no product: use what the client asked about just before.
+  if (explicitRequest && ![...scores.values()].some((s) => s > 0)) {
+    const recentAsks = options.messages
+      .filter((m) => m.role === "user")
+      .slice(-3)
+      .map((m) => m.content)
+      .join(" ");
+    scores = scoreProductsForQuery(products, recentAsks, poolProducts);
+  }
+  const scoreOf = (c: PhotoCandidate) => (c.product ? scores.get(c.product.id) ?? 0 : 0);
+  const best = Math.max(0, ...pool.map(scoreOf));
+
+  const kept =
+    best > 0
+      ? // The requested piece and its other models, best match first, then in the reply's order.
+        pool
+          .filter((c) => scoreOf(c) >= best * RELEVANT_PHOTO_RATIO)
+          .sort((a, b) => scoreOf(b) - scoreOf(a) || a.position - b.position)
+          .map((c) => c.media)
+      : explicitRequest
+        ? // Asked to see photos without naming a product: the products this reply presents.
+          pool.map((c) => c.media)
+        : // The request names no product ("ok je prends 2"): only what the model chose to attach.
+          pool.filter((c) => proposed.includes(c.media)).map((c) => c.media);
+
+  const result = [...others, ...kept].slice(0, MAX_MEDIA);
+  if (result.map((m) => m.url).join("|") !== media.map((m) => m.url).join("|")) {
+    console.info(`[ai] product photos: ${media.length} proposed by the model → ${result.length} sent`);
+  }
+  return { ...data, media: result.length ? result : undefined };
 }
 
 /**
@@ -400,7 +408,7 @@ function extractMarkdownImages(data: AgentResult): AgentResult {
   if (extracted.length === 0) return data;
 
   const existingMedia = data.media ?? [];
-  const allMedia = [...existingMedia, ...extracted].slice(0, 3);
+  const allMedia = [...existingMedia, ...extracted].slice(0, MAX_MEDIA);
 
   if (extracted.length > 0) {
     console.info(`[ai] extracted ${extracted.length} media item(s) from reply text → media[]`);

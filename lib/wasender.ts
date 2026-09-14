@@ -28,6 +28,10 @@ export interface SendResult {
   ok: boolean;
   id?: string;
   error?: string;
+  /** false = retrying the same request won't help (bad payload); true/undefined = transient. */
+  retryable?: boolean;
+  /** When the session may send again (rate limit), in ms from now. */
+  retryAfterMs?: number;
 }
 
 /**
@@ -99,6 +103,32 @@ export async function sendWhatsAppText(
 /** Longest 429 `retry_after` worth waiting for inline (message spacing); longer = give up. */
 const MAX_INLINE_RETRY_AFTER_S = 15;
 
+/**
+ * Per-session send pacing learned from Wasender 429s. With account protection
+ * (1 message / 5 s) or a trial (1 / min), the next message is held until the
+ * session may send, instead of being rejected and retried blindly — a reply
+ * followed by 4 photos then flows at the allowed rate.
+ */
+const sessionPacing = new Map<string, { intervalMs: number; nextAt: number }>();
+
+function slotWaitMs(apiKey: string): number {
+  const p = sessionPacing.get(apiKey);
+  return p ? Math.max(0, p.nextAt - Date.now()) : 0;
+}
+
+function noteSent(apiKey: string) {
+  const p = sessionPacing.get(apiKey);
+  if (p) p.nextAt = Date.now() + p.intervalMs;
+}
+
+function learnRateLimit(apiKey: string, retryAfterMs: number) {
+  const p = sessionPacing.get(apiKey) ?? { intervalMs: 0, nextAt: 0 };
+  // retry_after is the time left in the window; the window itself is at least 5 s.
+  p.intervalMs = Math.min(Math.max(p.intervalMs, retryAfterMs, 5_000), 65_000);
+  p.nextAt = Date.now() + retryAfterMs + 250;
+  sessionPacing.set(apiKey, p);
+}
+
 /** Shape of the JSON Wasender returns from message/upload/decrypt endpoints. */
 interface WasenderResponse {
   success?: boolean;
@@ -118,19 +148,30 @@ async function postSendMessage(
   payload: Record<string, unknown>,
   creds: WasenderCreds,
 ): Promise<SendResult> {
-  if (!creds.apiKey) return { ok: false, error: "wasender_not_connected" };
+  // A disconnected session may come back: the queue should try again later.
+  if (!creds.apiKey) return { ok: false, error: "wasender_not_connected", retryable: true };
+  const apiKey = creds.apiKey;
   const url = `${creds.baseUrl.replace(/\/$/, "")}/send-message`;
   const body = JSON.stringify(payload);
 
   let lastError = "";
+  let retryable = true;
+  let retryAfterMs: number | undefined;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Wait for this session's send slot (learned from previous 429s).
+    const slot = slotWaitMs(apiKey);
+    if (slot > MAX_INLINE_RETRY_AFTER_S * 1000) {
+      return { ok: false, error: lastError || "Wasender: limite d'envoi du numéro", retryable: true, retryAfterMs: slot };
+    }
+    if (slot > 0) await delay(slot);
+
     let waitMs = 400 * (attempt + 1);
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${creds.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body,
       });
@@ -138,6 +179,7 @@ async function postSendMessage(
       // Wasender returns HTTP 200 even on logical failures (e.g. disconnected
       // session) with `{ success: false, message }`. Treat that as a failure.
       if (res.ok && data?.success !== false) {
+        noteSent(apiKey);
         const id = data?.data?.msgId ?? data?.data?.id ?? data?.id;
         return { ok: true, id: id ? String(id) : undefined };
       }
@@ -146,19 +188,26 @@ async function postSendMessage(
       if (res.status === 429) {
         const retryAfter = Number(data?.retry_after ?? res.headers.get("retry-after"));
         const seconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5;
+        learnRateLimit(apiKey, seconds * 1000);
+        retryable = true;
+        retryAfterMs = seconds * 1000;
         if (seconds > MAX_INLINE_RETRY_AFTER_S) break;
-        waitMs = seconds * 1000 + 300;
-      } else if (res.status < 500) {
-        break; // other 4xx / logical failure: retrying won't help
+        waitMs = 0; // the slot wait at the top of the loop covers it
+      } else if (res.status >= 500) {
+        retryable = true;
+      } else {
+        retryable = false; // other 4xx / logical failure: the same request will fail again
+        break;
       }
     } catch (err) {
       lastError = err instanceof Error ? err.message : "network error";
+      retryable = true;
     }
-    if (attempt < MAX_RETRIES) await delay(waitMs);
+    if (attempt < MAX_RETRIES && waitMs > 0) await delay(waitMs);
   }
 
   console.error("[wasender] send failed:", lastError);
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError, retryable, retryAfterMs };
 }
 
 /** Send a WhatsApp voice note / audio message from a public URL. */

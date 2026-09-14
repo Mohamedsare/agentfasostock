@@ -2,6 +2,7 @@ import { after, type NextRequest } from "next/server";
 import { parseWasenderWebhook } from "@/lib/wasender";
 import { handleInboundMessage } from "@/lib/engine";
 import { syncDueProductSources } from "@/lib/product-sync";
+import { flushOutbound } from "@/lib/outbound";
 import { resolveAgentBySession } from "@/lib/agents";
 import { serverEnv, features, isSupabaseConfigured } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -25,7 +26,9 @@ async function captureRawPayload(payload: unknown) {
 export const dynamic = "force-dynamic";
 // The handler may chain media decrypt + transcription + LLM + TTS + upload +
 // WhatsApp send, so allow well beyond the 10s default.
-export const maxDuration = 60;
+// Queued product photos are delivered after the response (`after`), paced to
+// Wasender's sending limit — give that background work room.
+export const maxDuration = 300;
 
 /**
  * GET handshake + diagnostic. Reports which integrations are configured on the
@@ -115,6 +118,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await handleInboundMessage(inbound, agentCtx);
+    if (result.queuedMedia) {
+      // Photos go out right after the webhook is answered, in order; whatever
+      // doesn't fit in the time left is resumed by /api/outbound/run.
+      after(async () => {
+        try {
+          await flushOutbound({ agentId: agentCtx.agent.id, budgetMs: 240_000 });
+        } catch (err) {
+          console.error("[webhooks/wasender] outbound media flush failed:", err);
+        }
+      });
+    }
     return Response.json({ ok: true, ...result });
   } catch (error) {
     console.error("[webhooks/wasender] processing failed:", error);

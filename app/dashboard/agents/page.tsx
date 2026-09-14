@@ -52,6 +52,7 @@ export default async function AgentsPage() {
             hot_threshold: a.hot_threshold,
             ai_enabled: a.ai_enabled,
             follow_ups_enabled: a.follow_ups_enabled !== false,
+            learning_mode: a.learning_mode ?? "auto",
             operating_mode: a.operating_mode,
             updated_at: a.updated_at,
           }))}

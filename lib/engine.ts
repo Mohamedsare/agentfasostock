@@ -5,8 +5,6 @@ import {
   sendWhatsAppText,
   sendWhatsAppAudio,
   sendWhatsAppImage,
-  sendWhatsAppDocument,
-  sendWhatsAppVideo,
   sendLeadWhatsApp,
   uploadMediaToWasender,
   decryptMediaFile,
@@ -16,12 +14,13 @@ import {
 } from "@/lib/wasender";
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
 import { stripWhatsAppFormatting } from "@/lib/whatsapp-format";
+import { probeImage, queueOutboundMedia, sendMediaDirect } from "@/lib/outbound";
 import { isPersonalMessage, scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { classifyProspect } from "@/lib/classifier";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
 import type {
   AgentContext,
-  AgentMediaAttachment,
+  AgentLearning,
   AgentResult,
   Contact,
   Conversation,
@@ -50,6 +49,8 @@ export interface InboundResult {
   reason?: string;
   sent?: boolean;
   sendError?: string;
+  /** Attachments waiting in the outbound queue — the webhook flushes them after answering. */
+  queuedMedia?: number;
 }
 
 /**
@@ -181,10 +182,11 @@ export async function handleInboundMessage(
   // ─────────────────────────────────────────────────────────────────────────
 
   // Only fetch knowledge/products once we know we'll generate a response.
-  const [knowledge, files, products] = await Promise.all([
+  const [knowledge, files, products, learnings] = await Promise.all([
     getActiveKnowledge(db, agentId),
     getActiveKnowledgeFiles(db, agentId),
     getActiveProducts(db, agentId),
+    getActiveLearnings(db, agentId),
   ]);
 
   const result = await generateAgentResult({
@@ -193,6 +195,7 @@ export async function handleInboundMessage(
     knowledge,
     files,
     products,
+    learnings,
     previousScore: conversation.score,
     // Long-term memory: known facts + rolling summary, so the agent never loses
     // context past the raw-history window or restarts the discussion.
@@ -228,8 +231,9 @@ export async function handleInboundMessage(
   // When the client wrote by voice, answer by voice too (voice in → voice out).
   let sent: SendResult = { ok: false, error: "no_reply" };
   let repliedByVoice = false;
+  let queuedMedia = 0;
   if (result.reply && result.status !== "spam" && !isHandoff) {
-    let remainingMedia = result.media?.slice(0, 3) ?? [];
+    let remainingMedia = result.media?.slice(0, 4) ?? [];
 
     // One product photo: send it WITH the reply as its caption — a single
     // WhatsApp message, so Wasender's account protection ("1 message / 5 s")
@@ -283,33 +287,28 @@ export async function handleInboundMessage(
       });
     }
 
-    // Send media attachments decided by the AI (product photos, documents…).
-    // Sequential and spaced out: WhatsApp keeps the order and Wasender's
-    // message spacing doesn't reject the photos (429s are also retried).
+    // Product photos & other attachments go through a persistent queue
+    // (lib/outbound.ts): delivered in order right after the webhook answers,
+    // paced to the number's sending limit, retried by the cron if WhatsApp
+    // refuses or time runs out — never silently lost, whatever their number.
     if (remainingMedia.length) {
-      const creds = credsOf(ctx);
-      for (const attachment of remainingMedia) {
-        await new Promise((r) => setTimeout(r, MEDIA_SEND_GAP_MS));
-        const mediaSent = await sendAttachment(contact.phone, attachment, creds);
-        if (mediaSent.ok) {
-          await db.from("messages").insert({
-            agent_id: agentId,
-            conversation_id: conversation.id,
-            direction: "outbound",
-            sender: "ai",
-            // URL first so the dashboard can render the photo (components/ui/media-attachments.tsx).
-            content: `[${attachment.type}] ${attachment.url}${attachment.caption ? `\n${attachment.caption}` : ""}`,
-            intent: result.intent,
-            wasender_id: mediaSent.id ?? null,
-          });
-        } else {
-          console.error(`[engine] media send failed (${attachment.type} ${attachment.url}): ${mediaSent.error}`);
-          await logAudit(db, agentId, "wasender", "media_send_failed", conversation.id, {
-            type: attachment.type,
-            url: attachment.url,
-            error: mediaSent.error,
-          });
-        }
+      const queued = await queueOutboundMedia({
+        agentId,
+        conversationId: conversation.id,
+        phone: contact.phone,
+        media: remainingMedia,
+      });
+      if (queued) {
+        queuedMedia = remainingMedia.length;
+      } else {
+        // Queue table not migrated yet: send right away as before.
+        await sendMediaDirect(db, {
+          agentId,
+          conversationId: conversation.id,
+          phone: contact.phone,
+          media: remainingMedia,
+          creds: credsOf(ctx),
+        });
       }
     }
   }
@@ -338,6 +337,7 @@ export async function handleInboundMessage(
     score: result.score,
     sent: sent.ok,
     sendError: sent.ok ? undefined : sent.error,
+    queuedMedia,
   };
 }
 
@@ -562,56 +562,6 @@ async function deliverReply(
   return { sent: await sendWhatsAppText(phone, reply, creds), byVoice: false };
 }
 
-/** Pause before each attachment so photos arrive after the text, in order. */
-const MEDIA_SEND_GAP_MS = 1200;
-
-/** WhatsApp images: JPEG/PNG up to 5 MB (Wasender docs). */
-const MAX_WHATSAPP_IMAGE_BYTES = 5 * 1024 * 1024;
-
-/**
- * Check a photo WhatsApp will actually accept. "unsupported" = reachable but
- * wrong format/too big (e.g. WebP catalog images); "unknown" = couldn't tell
- * (HEAD not allowed, timeout) — then we just try.
- */
-async function probeImage(url: string): Promise<"ok" | "unsupported" | "unknown"> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    const res = await fetch(url, { method: "HEAD", signal: controller.signal, redirect: "follow" });
-    if (!res.ok) return "unknown";
-    const type = res.headers.get("content-type")?.toLowerCase() ?? "";
-    const size = Number(res.headers.get("content-length"));
-    if (type && !/image\/(jpe?g|png)/.test(type)) return "unsupported";
-    if (Number.isFinite(size) && size > MAX_WHATSAPP_IMAGE_BYTES) return "unsupported";
-    return "ok";
-  } catch {
-    return "unknown";
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function sendAttachment(phone: string, attachment: AgentMediaAttachment, creds: WasenderCreds): Promise<SendResult> {
-  switch (attachment.type) {
-    case "image": {
-      // A photo WhatsApp refuses as an image still reaches the client as a file.
-      if ((await probeImage(attachment.url)) === "unsupported") {
-        const fileName = decodeURIComponent(attachment.url.split("?")[0].split("/").pop() || "photo");
-        return sendWhatsAppDocument(phone, attachment.url, creds, fileName, attachment.caption);
-      }
-      return sendWhatsAppImage(phone, attachment.url, creds, attachment.caption);
-    }
-    case "document":
-      return sendWhatsAppDocument(phone, attachment.url, creds, attachment.caption, attachment.caption);
-    case "video":
-      return sendWhatsAppVideo(phone, attachment.url, creds, attachment.caption);
-    case "audio":
-      return sendWhatsAppAudio(phone, attachment.url, creds);
-    default:
-      return { ok: false, error: "unknown_type" };
-  }
-}
-
 // ─────────────────────────── helpers ───────────────────────────
 
 async function upsertContact(db: Db, inbound: InboundMessage, agentId: string): Promise<Contact> {
@@ -744,6 +694,18 @@ async function getActiveKnowledge(db: Db, agentId: string): Promise<KnowledgeBas
     .eq("agent_id", agentId)
     .eq("is_active", true);
   return (data as KnowledgeBaseEntry[]) ?? [];
+}
+
+/** Active self-learned lessons (lib/learning.ts); tolerant if the table isn't migrated yet. */
+async function getActiveLearnings(db: Db, agentId: string): Promise<AgentLearning[]> {
+  const { data } = await db
+    .from("agent_learnings")
+    .select("*")
+    .eq("agent_id", agentId)
+    .eq("status", "active")
+    .order("confidence", { ascending: false })
+    .limit(100);
+  return (data as AgentLearning[]) ?? [];
 }
 
 async function getActiveKnowledgeFiles(db: Db, agentId: string): Promise<KnowledgeFile[]> {

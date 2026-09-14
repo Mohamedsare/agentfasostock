@@ -7,6 +7,14 @@
     {
       "path": "/api/products/sync",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/outbound/run",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/learning/run",
+      "schedule": "15 */3 * * *"
     }
   ]
 }

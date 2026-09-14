@@ -4,13 +4,16 @@ import {
   renderProductDetail,
   selectRelevantKnowledge,
   selectRelevantProducts,
+  tokenize,
 } from "@/lib/catalog";
+import { LEARNING_KIND_META } from "@/lib/learning-meta";
 import type {
   AgentSettings,
   AgentTone,
   KnowledgeBaseEntry,
   KnowledgeFile,
   Product,
+  AgentLearning,
 } from "@/lib/types";
 
 const TONE_GUIDANCE: Record<AgentTone, string> = {
@@ -40,6 +43,8 @@ export function buildSystemPrompt(options: {
   knowledge?: KnowledgeBaseEntry[];
   files?: KnowledgeFile[];
   products?: Product[];
+  /** Lessons learned from past conversations (only "active" ones are used). */
+  learnings?: AgentLearning[];
   toneOverride?: AgentTone;
   promptOverride?: string;
   memory?: ConversationMemory;
@@ -57,6 +62,7 @@ export function buildSystemPrompt(options: {
     knowledge = [],
     files = [],
     products = [],
+    learnings = [],
     toneOverride,
     promptOverride,
     memory,
@@ -87,6 +93,8 @@ export function buildSystemPrompt(options: {
         .map((k) => `- [${k.category}] ${k.title}: ${k.content}`)
         .join("\n")}`
     : "";
+
+  const learningsBlock = buildLearningsBlock(learnings, queryTokens);
 
   const activeFiles = files.filter((f) => f.is_active);
   const filesBlock = activeFiles.length
@@ -127,11 +135,12 @@ export function buildSystemPrompt(options: {
   • Cherche dans les FICHES PRODUITS${catalogSearch ? " puis, si besoin, avec search_products" : ""} et réponds IMMÉDIATEMENT à la demande. Jamais de reprise humaine pour une question produit, prix ou photo.
   • Prix, stock, référence, conditionnement : recopie EXACTEMENT la fiche. Jamais d'estimation, d'arrondi ni de prix inventé. Écris les prix comme la fiche (ex. "17 500 FCFA").
   • Désigne le produit par son nom exact tel qu'il figure dans la fiche.
+  • ORTHOGRAPHE : les clients écrivent souvent mal ("bouji" = bougie, "plakette" = plaquette, "chateu" = château, "demareur" = démarreur) et le catalogue contient lui aussi des fautes ("DEMARRER", "CONTEUR", "FRIEN"). Comprends toujours le sens, ne corrige jamais le client, et avec search_products essaie l'orthographe du client ET l'orthographe correcte.
   • Plusieurs produits correspondent (variantes, cylindrées, marques) → cite les 2-3 plus proches avec leur prix, ou pose UNE question pour préciser (modèle de moto, référence).
   • Produit en RUPTURE → dis-le simplement et propose une alternative disponible trouvée dans les fiches.
   • Prix "non renseigné" → ne donne aucun prix, propose de vérifier.
   • Achat en quantité / en gros → propose le conditionnement de la fiche (ex. carton) avec son prix.
-  • Photo demandée → mets l'URL de la fiche dans "media". Si la fiche indique "Photos : aucune", dis-le poliment et décris le produit.
+  • PHOTOS AUTOMATIQUES : dès que tu présentes un produit que le client cherche, joins sa photo dans "media" — une photo par modèle proposé, 4 maximum — même s'il ne l'a pas demandée. Ne renvoie pas une photo déjà envoyée dans la conversation, sauf s'il redemande à la voir. Si la fiche indique "(pas de photo disponible…)", ne promets pas de photo.
   • Produit réellement introuvable${catalogSearch ? " après recherche" : ""} → dis-le honnêtement et propose le produit ou la catégorie la plus proche.`
     : "";
 
@@ -150,7 +159,7 @@ export function buildSystemPrompt(options: {
 
   return `${base}
 
-${TONE_GUIDANCE[tone]}${modeBlock}${memoryBlock}${knowledgeBlock}${filesBlock}${productsBlock}${handoffBlock}
+${TONE_GUIDANCE[tone]}${modeBlock}${memoryBlock}${knowledgeBlock}${learningsBlock}${filesBlock}${productsBlock}${handoffBlock}
 
 RÈGLES NON NÉGOCIABLES :
 - Réponds dans la langue du client. Par défaut français.
@@ -173,11 +182,11 @@ RÈGLES NON NÉGOCIABLES :
 - Contact personnel/familial sans lien commercial → status "exclu", reply "". Sans réponse.
 
 ENVOI DE MÉDIAS — tu peux envoyer des images, documents, vidéos ou audios comme un vrai commercial :
-- Envoie une image produit quand le prospect demande "vous avez des photos ?", "à quoi ça ressemble ?", ou montre un intérêt concret pour un produit.
+- Photo produit : envoie-la AUTOMATIQUEMENT dès que tu présentes un produit que le client demande (une photo par modèle proposé), sans attendre qu'il la réclame.
 - Envoie un document (PDF, catalogue) quand le prospect demande "envoyez-moi les détails", "vous avez une brochure ?", "c'est quoi votre catalogue ?".
 - Envoie une vidéo si elle explique ou démontre un produit que le prospect veut voir.
-- N'envoie JAMAIS un média par défaut ou sans que le contexte le justifie — exactement comme un humain ne spammerait pas avec des pièces jointes inutiles.
-- Maximum 3 médias par réponse.
+- N'envoie pas de média sans rapport avec la demande, et ne renvoie pas un média déjà envoyé dans la conversation (sauf si le client le redemande).
+- Maximum 4 médias par réponse.
 - Si tu n'as aucun média pertinent disponible dans le CATALOGUE ou les DOCUMENTS ci-dessus, laisse "media" absent du JSON.
 - INTERDIT ABSOLU : ne mets JAMAIS une URL ou un lien dans "reply". Ne mets JAMAIS de syntaxe markdown ![...](...) dans "reply". Les médias vont UNIQUEMENT dans le tableau "media". Le champ "reply" ne contient que du texte pur sans aucun lien.
 
@@ -202,6 +211,27 @@ FORMAT DE SORTIE — tu DOIS répondre avec un objet JSON valide, sans texte aut
 }
 
 RÈGLE MÉMOIRE ABSOLUE : avant de poser une question, vérifie TOUJOURS l'historique ET le bloc MÉMOIRE ci-dessus. Si l'information est déjà connue, ne la redemande JAMAIS. Si le contact est en train de passer une commande ou de donner ses coordonnées de livraison, accompagne-le dans cette étape — ne reviens pas à des questions de qualification.`;
+}
+
+/** Max lessons injected per reply — the most relevant to the current ask first. */
+const MAX_LEARNINGS_IN_PROMPT = 15;
+
+/**
+ * Lessons the agent learned from its past conversations (lib/learning.ts).
+ * Ranked by overlap with the current request, then confidence.
+ */
+function buildLearningsBlock(learnings: AgentLearning[], queryTokens: string[]): string {
+  const active = learnings.filter((l) => l.status === "active");
+  if (!active.length) return "";
+  const query = new Set(queryTokens);
+  const ranked = active
+    .map((l) => ({ l, relevance: tokenize(`${l.title} ${l.content}`).filter((t) => query.has(t)).length }))
+    .sort((a, b) => b.relevance - a.relevance || b.l.confidence - a.l.confidence)
+    .slice(0, MAX_LEARNINGS_IN_PROMPT)
+    .map((x) => x.l);
+  return `\n\nAPPRENTISSAGES — leçons tirées de tes conversations passées. Applique-les ; en cas de conflit, le CATALOGUE et la BASE DE CONNAISSANCE priment :\n${ranked
+    .map((l) => `- [${LEARNING_KIND_META[l.kind]?.label ?? l.kind}] ${l.title} : ${l.content}`)
+    .join("\n")}`;
 }
 
 /**

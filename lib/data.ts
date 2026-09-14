@@ -12,6 +12,7 @@ import {
   mockNotes,
 } from "@/lib/mock-data";
 import type {
+  AgentLearning,
   AgentSettings,
   Contact,
   ConversationWithContact,
@@ -44,6 +45,7 @@ function defaultAgentSettings(): AgentSettings {
     hot_threshold: DEFAULT_AGENT_SETTINGS.hot_threshold,
     ai_enabled: true,
     follow_ups_enabled: true,
+    learning_mode: "auto",
     operating_mode: DEFAULT_AGENT_SETTINGS.operating_mode,
     updated_at: new Date().toISOString(),
   };
@@ -125,6 +127,21 @@ export async function getKnowledge(): Promise<KnowledgeBaseEntry[]> {
     .eq("agent_id", agentId)
     .order("category", { ascending: true });
   return (data as unknown as KnowledgeBaseEntry[]) ?? [];
+}
+
+/** Lessons the active agent learned from its conversations (all statuses). */
+export async function getLearnings(): Promise<AgentLearning[]> {
+  if (usingMockData) return [];
+  const agentId = await getActiveAgentId();
+  if (!agentId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("agent_learnings")
+    .select("*")
+    .eq("agent_id", agentId)
+    .order("last_seen_at", { ascending: false })
+    .limit(500);
+  return (data as unknown as AgentLearning[]) ?? [];
 }
 
 export async function getKnowledgeFiles(): Promise<KnowledgeFile[]> {

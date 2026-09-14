@@ -54,7 +54,51 @@ const STOPWORDS = new Set([
   "cout", "tarif", "dispo", "disponible", "vend", "vendez", "reste", "aussi",
   "encore", "ok", "oui", "non", "bien", "peux", "pouvez", "moi", "votre",
   "vos", "notre", "nos", "leur", "leurs", "comme", "tout", "tous", "fait",
+  "piece", "pieces", "autre", "autres", "dautre", "dautres", "model", "modele", "modeles",
 ]);
+
+/** Abbreviations used in parts catalogs, matched as the full word too. */
+const ABBREVIATIONS: Record<string, string> = {
+  av: "avant",
+  ar: "arriere",
+  arr: "arriere",
+};
+
+/**
+ * French phonetic key, so words that SOUND the same match even when spelled
+ * differently — on the client side ("bouji", "plakette", "compteur") and on the
+ * catalog side, which is itself often misspelled ("CONTEUR", "DISQUAIR",
+ * "ESSANCE"). "bougie" and "bouji" → "buji"; "compteur" and "conteur" → "konteur".
+ * Input: a normalized alphabetic token (lowercase, no accents).
+ */
+export function phoneticKey(word: string): string {
+  let w = word
+    .replace(/ph/g, "f")
+    .replace(/x/g, "ks")
+    .replace(/s?[cs]h/g, "X") // ch/sh/sch sound (placeholder)
+    .replace(/qu/g, "k")
+    .replace(/ck/g, "k")
+    .replace(/gu(?=[eiy])/g, "g")
+    .replace(/c(?=[eiy])/g, "s")
+    .replace(/g(?=[eiy])/g, "j")
+    .replace(/[cq]/g, "k")
+    .replace(/eau|au/g, "o")
+    .replace(/oo|ou/g, "u")
+    .replace(/[ae]i[nm](?![aeiou])/g, "in")
+    .replace(/y/g, "i")
+    .replace(/[ae][nm](?![aeiou])/g, "an")
+    .replace(/om(?![aeiou])/g, "on")
+    .replace(/ai|ei/g, "e")
+    .replace(/(?:er|ez|et)$/, "e")
+    .replace(/h/g, "")
+    .replace(/z/g, "s")
+    .replace(/w/g, "v")
+    .replace(/(.)\1+/g, "$1");
+  // Silent endings: "pose" ≈ "pos", "pieds" ≈ "pied", "arriere" ≈ "arrier".
+  if (w.length > 3) w = w.replace(/e$/, "");
+  if (w.length > 3) w = w.replace(/[stdx]$/, "");
+  return w;
+}
 
 /**
  * Normalize French text for matching: lowercase, strip diacritics, and replace
@@ -89,6 +133,8 @@ export function tokenize(input: string): string[] {
       }
       if (part.length < 2 || STOPWORDS.has(part)) continue;
       tokens.push(foldSingular(part));
+      const expansion = ABBREVIATIONS[part];
+      if (expansion) tokens.push(expansion);
     }
   }
   return tokens;
@@ -141,8 +187,13 @@ interface ProductIndex {
   items: IndexedProduct[];
   df: Map<string, number>;
   vocab: string[];
+  /** Phonetic key of each vocabulary token. */
+  phonetic: Map<string, string>;
+  byId: Map<string, IndexedProduct>;
   /** Per query token: matching vocabulary tokens with a similarity in (0, 1]. */
   expansions: Map<string, Map<string, number>>;
+  /** Per query token: IDF of all its spellings together. */
+  conceptIdf: Map<string, number>;
 }
 
 const indexCache = new WeakMap<Product[], ProductIndex>();
@@ -164,51 +215,92 @@ function getIndex(products: Product[]): ProductIndex {
     for (const t of new Set([...primary, ...meta, ...body])) df.set(t, (df.get(t) ?? 0) + 1);
     items.push({ product, primary, meta, body });
   }
-  const index: ProductIndex = { items, df, vocab: [...df.keys()], expansions: new Map() };
+  const vocab = [...df.keys()];
+  const index: ProductIndex = {
+    items,
+    df,
+    vocab,
+    phonetic: new Map(vocab.map((t) => [t, phoneticKey(t)])),
+    byId: new Map(items.map((i) => [i.product.id, i])),
+    expansions: new Map(),
+    conceptIdf: new Map(),
+  };
   indexCache.set(products, index);
   return index;
 }
 
-/** Inverse document frequency: rare tokens discriminate, ubiquitous ones don't. */
-function idf(index: ProductIndex, token: string): number {
-  return Math.log(1 + index.items.length / (1 + (index.df.get(token) ?? 0)));
+/**
+ * Inverse document frequency of what the client MEANT by a query token: all its
+ * spellings count together. Otherwise a rare misspelling in the catalog
+ * ("NANO SIRUS", 1 product) would outweigh the common correct word ("SIRIUS",
+ * 50 products) and win the ranking on a typo alone.
+ */
+function conceptIdf(index: ProductIndex, q: string): number {
+  const cached = index.conceptIdf.get(q);
+  if (cached !== undefined) return cached;
+  let df = 0;
+  for (const v of expand(index, q).keys()) df += index.df.get(v) ?? 0;
+  const value = Math.log(1 + index.items.length / (1 + Math.min(df, index.items.length)));
+  index.conceptIdf.set(q, value);
+  return value;
 }
 
-/** Levenshtein distance with an early exit once `max` is exceeded. */
+/**
+ * Edit distance counting an adjacent swap as ONE typo ("siruis" → "sirius",
+ * "frien" → "frein"), with an early exit once `max` is exceeded.
+ */
 function editDistance(a: string, b: string, max: number): number {
   if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2: number[] = [];
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  let prevMin = 0;
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
     let rowMin = i;
     for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-      rowMin = Math.min(rowMin, cur[j]);
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur[j] = v;
+      rowMin = Math.min(rowMin, v);
     }
-    if (rowMin > max) return max + 1;
+    // A swap can reach back two rows, so only stop when both rows are out of range.
+    if (rowMin > max && prevMin > max) return max + 1;
+    prev2 = prev;
     prev = cur;
+    prevMin = rowMin;
   }
   return prev[b.length];
 }
 
 /**
- * Catalog tokens a query token should match. Numbers match exactly only (a
- * "115" is not a "110"); words also match close typos and prefixes.
+ * Catalog tokens a query token should match. Numbers and references match
+ * exactly only (a "115" is not a "110"). Words also match — on either side —
+ * the same sound ("bouji" ≈ "bougie"), a prefix ("amort" ≈ "amortisseur"), a
+ * close typo or swap ("frien" ≈ "frein"), or a close sound ("siruis" ≈ "sirius").
  */
 function expand(index: ProductIndex, q: string): Map<string, number> {
   const cached = index.expansions.get(q);
   if (cached) return cached;
   const out = new Map<string, number>();
   if (index.df.has(q)) out.set(q, 1);
-  if (!/\d/.test(q) && q.length >= 4) {
-    const maxEdits = q.length >= 7 ? 2 : 1;
+  if (!/\d/.test(q) && q.length >= 3) {
+    const qKey = phoneticKey(q);
+    const maxEdits = q.length >= 7 ? 2 : q.length >= 4 ? 1 : 0;
+    const maxKeyEdits = qKey.length >= 6 ? 2 : qKey.length >= 4 ? 1 : 0;
     for (const v of index.vocab) {
-      if (v === q || /\d/.test(v) || v.length < 4) continue;
-      if ((v.startsWith(q) || q.startsWith(v)) && Math.abs(v.length - q.length) <= 3) {
-        out.set(v, 0.8);
-      } else if (editDistance(q, v, maxEdits) <= maxEdits) {
-        out.set(v, 0.7);
+      if (v === q || /\d/.test(v) || v.length < 3) continue;
+      const vKey = index.phonetic.get(v) ?? phoneticKey(v);
+      let similarity = 0;
+      if (qKey.length >= 2 && vKey === qKey) {
+        similarity = 0.85; // same sound
+      } else if (q.length >= 4 && v.length >= 4 && (v.startsWith(q) || q.startsWith(v)) && Math.abs(v.length - q.length) <= 3) {
+        similarity = 0.8; // prefix / truncated word
+      } else if (maxEdits > 0 && v.length >= 4 && editDistance(q, v, maxEdits) <= maxEdits) {
+        similarity = 0.75; // typo or swapped letters
+      } else if (maxKeyEdits > 0 && v.length >= 4 && editDistance(qKey, vKey, maxKeyEdits) <= maxKeyEdits) {
+        similarity = 0.7; // close sound
       }
+      if (similarity > (out.get(v) ?? 0)) out.set(v, similarity);
     }
   }
   index.expansions.set(q, out);
@@ -227,8 +319,9 @@ function scoreIndexed(index: ProductIndex, item: IndexedProduct, weights: Map<st
   for (const [q, weight] of weights) {
     const numeric = /^\d+$/.test(q);
     let best = 0;
+    const qIdf = conceptIdf(index, q);
     for (const [v, similarity] of expand(index, q)) {
-      const w = idf(index, v) * similarity;
+      const w = qIdf * similarity;
       const s = item.primary.has(v) ? (numeric ? 5 : 3) * w : item.meta.has(v) ? 2 * w : item.body.has(v) ? w : 0;
       if (s > best) best = s;
     }
@@ -255,6 +348,23 @@ function rank(index: ProductIndex, pool: IndexedProduct[], weights: Map<string, 
     .filter((s) => s.score >= top * RELATIVE_SCORE_FLOOR)
     .slice(0, limit)
     .map((s) => s.item.product);
+}
+
+/**
+ * Fuzzy relevance of some catalog products to a free-text request, with the
+ * same scoring as retrieval (typos, sounds, references). Used to pick which
+ * product photos match what the client asked for.
+ */
+export function scoreProductsForQuery(products: Product[], query: string, pool: Product[]): Map<string, number> {
+  const index = getIndex(products);
+  const weights = weightsOf(tokenize(query));
+  const scores = new Map<string, number>();
+  if (weights.size === 0) return scores;
+  for (const p of pool) {
+    const item = index.byId.get(p.id);
+    if (item) scores.set(p.id, scoreIndexed(index, item, weights));
+  }
+  return scores;
 }
 
 export interface CategorySummary {
