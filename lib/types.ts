@@ -247,6 +247,8 @@ export interface AgentSettings {
   qualified_threshold: number;
   hot_threshold: number;
   ai_enabled: boolean;
+  /** Automatic follow-ups (relances) on/off for this agent. */
+  follow_ups_enabled: boolean;
   operating_mode: AgentOperatingMode;
   updated_at: string;
 }

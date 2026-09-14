@@ -3,15 +3,16 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Send, X, Loader2, Clock, CheckCircle2, MessageSquare, PlayCircle } from "lucide-react";
+import { Send, X, Loader2, Clock, CheckCircle2, MessageSquare, PlayCircle, BellRing, BellOff } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { toast } from "sonner";
 import { cn, getInitials, formatDateTime } from "@/lib/utils";
-import { cancelFollowUp, sendFollowUpNow, runFollowUpsNow } from "@/lib/actions/follow-ups";
+import { cancelFollowUp, sendFollowUpNow, runFollowUpsNow, setFollowUpsEnabled } from "@/lib/actions/follow-ups";
 import type { BadgeTone } from "@/lib/constants";
 import type { FollowUpStatus } from "@/lib/types";
 
@@ -32,7 +33,7 @@ const STATUS_META: Record<FollowUpStatus, { label: string; tone: BadgeTone }> = 
   responded: { label: "Répondu", tone: "primary" },
 };
 
-export function FollowUpsView({ followUps }: { followUps: EnrichedFollowUp[] }) {
+export function FollowUpsView({ followUps, enabled }: { followUps: EnrichedFollowUp[]; enabled: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
   const [activeId, setActiveId] = React.useState<string | null>(null);
@@ -75,24 +76,37 @@ export function FollowUpsView({ followUps }: { followUps: EnrichedFollowUp[] }) 
 
   const runningNow = pending && activeId === "__run__";
 
+  const toggle = <FollowUpsToggle key={String(enabled)} enabled={enabled} scheduledCount={scheduled.length} />;
+
   if (followUps.length === 0) {
     return (
-      <EmptyState
-        icon={Send}
-        title="Aucune relance"
-        description="Les relances planifiées (24h, 3j, 7j sans réponse) apparaîtront ici."
-      />
+      <div className="space-y-6">
+        {toggle}
+        <EmptyState
+          icon={Send}
+          title="Aucune relance"
+          description={
+            enabled
+              ? "Les relances planifiées (24h, 3j, 7j sans réponse) apparaîtront ici."
+              : "Les relances sont désactivées pour cet agent."
+          }
+        />
+      </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <Button size="sm" variant="outline" onClick={runNow} disabled={pending}>
-          {runningNow ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
-          Lancer les relances dues
-        </Button>
-      </div>
+      {toggle}
+
+      {enabled && (
+        <div className="flex justify-end">
+          <Button size="sm" variant="outline" onClick={runNow} disabled={pending}>
+            {runningNow ? <Loader2 className="size-4 animate-spin" /> : <PlayCircle className="size-4" />}
+            Lancer les relances dues
+          </Button>
+        </div>
+      )}
 
       <Section title="À venir" icon={Clock} count={scheduled.length}>
         {scheduled.map((f) => (
@@ -112,6 +126,70 @@ export function FollowUpsView({ followUps }: { followUps: EnrichedFollowUp[] }) 
         </Section>
       )}
     </div>
+  );
+}
+
+/** Agent-wide on/off switch for automatic follow-ups. */
+function FollowUpsToggle({ enabled, scheduledCount }: { enabled: boolean; scheduledCount: number }) {
+  const router = useRouter();
+  const [pending, startTransition] = React.useTransition();
+  // Re-mounted via `key` when the server value changes, so this stays in sync.
+  const [checked, setChecked] = React.useState(enabled);
+
+  function change(next: boolean) {
+    if (
+      !next &&
+      scheduledCount > 0 &&
+      !confirm(`Désactiver les relances ? Les ${scheduledCount} relance(s) planifiée(s) seront annulées.`)
+    ) {
+      return;
+    }
+    setChecked(next);
+    startTransition(async () => {
+      const res = await setFollowUpsEnabled(next);
+      if (res.ok) {
+        toast.success(
+          next
+            ? "Relances automatiques activées."
+            : `Relances désactivées${res.cancelled ? ` — ${res.cancelled} relance(s) annulée(s)` : ""}.`,
+        );
+        router.refresh();
+      } else {
+        setChecked(!next);
+        toast.error(res.error ?? "Échec.");
+      }
+    });
+  }
+
+  const Icon = checked ? BellRing : BellOff;
+  return (
+    <Card className={cn("flex items-center gap-4 p-4", !checked && "border-dashed")}>
+      <div
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-lg",
+          checked ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+        )}
+      >
+        <Icon className="size-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p id="follow-ups-toggle-label" className="font-semibold text-foreground">
+          Relances automatiques {checked ? "activées" : "désactivées"}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {checked
+            ? "L'agent relance les prospects sans réponse après 24h, 3 jours puis 7 jours."
+            : "Aucune relance ne sera planifiée ni envoyée pour cet agent."}
+        </p>
+      </div>
+      {pending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+      <Switch
+        checked={checked}
+        onCheckedChange={change}
+        disabled={pending}
+        aria-labelledby="follow-ups-toggle-label"
+      />
+    </Card>
   );
 }
 

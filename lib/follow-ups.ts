@@ -160,6 +160,12 @@ export async function runDueFollowUps(agentId?: string): Promise<RunResult> {
       result.failed++;
       continue;
     }
+    // Relances turned off for this agent since scheduling: never send.
+    if (ctx.agent.follow_ups_enabled === false) {
+      await db.from("follow_ups").update({ status: "cancelled" }).eq("id", fu.id);
+      result.skipped++;
+      continue;
+    }
 
     const sent = await sendWhatsAppText(phone, message, wasenderCredsOf(ctx));
     await db

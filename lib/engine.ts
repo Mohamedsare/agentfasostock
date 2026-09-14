@@ -270,7 +270,9 @@ export async function handleInboundMessage(
   // Schedule the next relance (24h) when the conversation is still in play.
   // Terminal/handoff statuses get no auto follow-up: a human takes over, or the
   // lead is converted/lost. Only schedule when we actually replied.
-  if (sent.ok && !isHandoff && !isTerminalForFollowUp(result.status)) {
+  // `follow_ups_enabled === false` = relances turned off for this agent.
+  const followUpsEnabled = ctx.agent.follow_ups_enabled !== false;
+  if (followUpsEnabled && sent.ok && !isHandoff && !isTerminalForFollowUp(result.status)) {
     await scheduleFollowUp(db, {
       agentId,
       conversation: { id: conversation.id, status: result.status },

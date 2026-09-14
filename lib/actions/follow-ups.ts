@@ -34,6 +34,38 @@ export async function runFollowUpsNow(): Promise<RunFollowUpsResult> {
   }
 }
 
+/**
+ * Turn automatic follow-ups on/off for the active agent. Turning them off also
+ * cancels every relance still scheduled, so nothing goes out afterwards.
+ */
+export async function setFollowUpsEnabled(
+  enabled: boolean,
+): Promise<ActionResult & { cancelled?: number }> {
+  if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
+  const agentId = await getActiveAgentId();
+  if (!agentId) return { ok: false, error: "Aucun agent actif." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("agents").update({ follow_ups_enabled: enabled }).eq("id", agentId);
+  if (error) return { ok: false, error: error.message };
+
+  let cancelled = 0;
+  if (!enabled) {
+    const { data, error: cancelError } = await supabase
+      .from("follow_ups")
+      .update({ status: "cancelled" })
+      .eq("agent_id", agentId)
+      .eq("status", "scheduled")
+      .select("id");
+    if (cancelError) return { ok: false, error: cancelError.message };
+    cancelled = data?.length ?? 0;
+  }
+
+  revalidate();
+  revalidatePath("/dashboard/agent");
+  return { ok: true, cancelled };
+}
+
 /** Cancel a scheduled follow-up. */
 export async function cancelFollowUp(id: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };

@@ -43,6 +43,7 @@ function defaultAgentSettings(): AgentSettings {
     qualified_threshold: DEFAULT_AGENT_SETTINGS.qualified_threshold,
     hot_threshold: DEFAULT_AGENT_SETTINGS.hot_threshold,
     ai_enabled: true,
+    follow_ups_enabled: true,
     operating_mode: DEFAULT_AGENT_SETTINGS.operating_mode,
     updated_at: new Date().toISOString(),
   };

@@ -1,12 +1,17 @@
 import { PageHeader } from "@/components/dashboard/page-header";
 import { FollowUpsView, type EnrichedFollowUp } from "@/components/follow-ups/follow-ups-view";
-import { getConversations, getFollowUps } from "@/lib/data";
+import { getAgentSettings, getConversations, getFollowUps } from "@/lib/data";
 import { contactLabel } from "@/lib/utils";
 
 export const metadata = { title: "Relances" };
 
 export default async function FollowUpsPage() {
-  const [followUps, conversations] = await Promise.all([getFollowUps(), getConversations()]);
+  const [followUps, conversations, settings] = await Promise.all([
+    getFollowUps(),
+    getConversations(),
+    getAgentSettings(),
+  ]);
+  const enabled = settings.follow_ups_enabled !== false;
 
   const nameByContact = new Map(
     conversations.map((c) => [c.contact.id, contactLabel(c.contact.name, c.contact.phone)]),
@@ -28,9 +33,13 @@ export default async function FollowUpsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Relances automatiques"
-        description={`${active} relance(s) planifiée(s) · règle 24h / 3j / 7j, max 3.`}
+        description={
+          enabled
+            ? `${active} relance(s) planifiée(s) · règle 24h / 3j / 7j, max 3.`
+            : "Relances désactivées — aucune relance n'est planifiée ni envoyée."
+        }
       />
-      <FollowUpsView followUps={enriched} />
+      <FollowUpsView followUps={enriched} enabled={enabled} />
     </div>
   );
 }
