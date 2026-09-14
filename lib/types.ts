@@ -101,6 +101,9 @@ export interface Conversation {
   last_message_preview: string | null;
   unread_count: number;
   ai_enabled: boolean;
+  /** Who switched the AI off: "ai" (handoff, may auto-resume) or "admin" (human takeover). */
+  silenced_by?: "ai" | "admin" | null;
+  silenced_at?: string | null;
   created_at: string;
   updated_at: string;
 }

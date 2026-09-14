@@ -37,6 +37,8 @@ export interface GenerateOptions {
   previousScore?: number;
   /** Long-term memory of the prospect (known facts + rolling summary). */
   memory?: ConversationMemory;
+  /** Extra instruction appended to the system prompt for this generation only. */
+  extraInstruction?: string;
   /** Tenant OpenAI key; falls back to the platform key when omitted. */
   openaiKey?: string;
 }
@@ -84,7 +86,10 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     });
 
     const chatMessages: ChatMessage[] = [
-      { role: "system", content: systemPrompt },
+      {
+        role: "system",
+        content: options.extraInstruction ? `${systemPrompt}\n\n${options.extraInstruction}` : systemPrompt,
+      },
       ...options.messages,
     ];
 
@@ -115,7 +120,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
         chatMessages.push({ role: "tool", tool_call_id: call.id, content });
       }
     }
-    const parsed = agentResultSchema.safeParse(JSON.parse(raw));
+    const parsed = agentResultSchema.safeParse(parseModelJson(raw));
 
     if (!parsed.success) {
       console.error("[ai] schema validation failed — using fallback. Issues:", JSON.stringify(parsed.error.issues));
@@ -149,7 +154,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Then drop any media URL the model invented — only real catalog/document files go out.
     const grounded = selectProductPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options);
     // Guarantee WhatsApp syntax (*gras*, one list item per line) whatever the model produced.
-    const sanitized = { ...grounded, reply: formatWhatsAppReply(grounded.reply) };
+    const sanitized = { ...grounded, reply: formatWhatsAppReply(removeStallingPromises(grounded.reply)) };
 
     // Blend model score with deterministic score, then re-derive status so the
     // configured thresholds (§9) are always respected.
@@ -230,6 +235,67 @@ function runSearchTool(products: Product[], rawArgs: string): string {
     );
   }
   return `${results.length} résultat(s) pour « ${query} » :\n${results.map(renderProductDetail).join("\n")}`;
+}
+
+/** A sentence promising to check / come back later — the agent can never do that. */
+const STALLING_SENTENCE =
+  /(^|(?<=[.!?\n]))\s*[^.!?\n]*\bje\s+(?:vais\s+|vous\s+|te\s+|t['’]\s*)?(?:(?:faire\s+)?v[ée]rifier|revenir|reviens|recontacter|tiens\s+au\s+courant|tenir\s+(?:inform[ée]|au\s+courant))[^.!?\n]*[.!?]*/gi;
+
+/**
+ * Drop "Je vais vérifier le tarif pour vous." style promises: the agent can't
+ * come back later, and clients kept waiting ("j'attend la photo"). Only removed
+ * when the rest of the message still answers or asks something.
+ */
+export function removeStallingPromises(reply: string): string {
+  if (!reply) return reply;
+  const cleaned = reply.replace(STALLING_SENTENCE, "$1").replace(/^[\s,;:!.-]+/, "").trim();
+  return cleaned.length >= 12 ? cleaned : reply;
+}
+
+/**
+ * Parse the model's JSON answer. In production the model sometimes returned a
+ * JSON object followed by a second one ("Unexpected non-whitespace character
+ * after JSON"), which used to turn the whole reply into the canned fallback.
+ * Take the first complete object that looks like an answer.
+ */
+export function parseModelJson(raw: string): unknown {
+  const text = raw.trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // fall through to object extraction
+  }
+  const objects: unknown[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          objects.push(JSON.parse(text.slice(start, i + 1)));
+        } catch {
+          // skip a malformed fragment
+        }
+      }
+    }
+  }
+  const answer = objects.find((o) => o && typeof o === "object" && "reply" in (o as object)) ?? objects[0];
+  if (answer === undefined) throw new SyntaxError(`No JSON object in model output: ${text.slice(0, 120)}`);
+  return answer;
 }
 
 function fileNameOf(url: string): string {

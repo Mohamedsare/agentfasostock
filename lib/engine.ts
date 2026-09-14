@@ -15,6 +15,13 @@ import {
 import { transcribeAudio, describeImage, synthesizeSpeech } from "@/lib/media";
 import { stripWhatsAppFormatting } from "@/lib/whatsapp-format";
 import { probeImage, queueOutboundMedia, sendMediaDirect } from "@/lib/outbound";
+import {
+  BURST_WINDOW_MS,
+  NEUTRAL_FOLLOW_UP_REPLY,
+  NO_HANDOFF_INSTRUCTION,
+  canAutoResume,
+  handoffJustified,
+} from "@/lib/handoff";
 import { isPersonalMessage, scoreConversation, shouldNotifyAdmin } from "@/lib/scoring";
 import { classifyProspect } from "@/lib/classifier";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
@@ -78,28 +85,45 @@ export async function handleInboundMessage(
     if (existing) return { status: "duplicate" };
   }
 
-  // Turn whatever the client sent (text, voice, image, document…) into text the
-  // agent can reason about, and decide whether to answer with a voice note.
-  const resolved = await resolveInboundContent(inbound, ctx);
-  if (!resolved.text) return { status: "ignored", reason: "unsupported_or_empty" };
+  // Events with neither text nor usable media (reactions, protocol messages…).
+  if (inbound.kind === "other" && !inbound.text.trim()) {
+    return { status: "ignored", reason: "unsupported_or_empty" };
+  }
 
   const contact = await upsertContact(db, inbound, agentId);
   const conversation = await getOrCreateConversation(db, contact.id, agentId);
 
-  // If this contact is marked as personal/excluded, never respond and stay silent.
-  if (conversation.status === "exclu") {
-    return { status: "ignored", reason: "contact_exclu", conversationId: conversation.id };
+  // Record the inbound message FIRST, keyed on the provider id. A webhook that
+  // Wasender re-sends while we're still transcribing / answering hits the
+  // unique index (migration 0015) and stops here — no double reply.
+  const { data: inboundRow, error: inboundError } = await db
+    .from("messages")
+    .insert({
+      agent_id: agentId,
+      conversation_id: conversation.id,
+      direction: "inbound",
+      sender: "contact",
+      content: inbound.text.trim() || "…",
+      wasender_id: inbound.messageId,
+    })
+    .select("id")
+    .single();
+  if (inboundError || !inboundRow) {
+    if (inboundError?.code === "23505") return { status: "duplicate" };
+    throw new Error(`inbound message insert failed: ${inboundError?.message}`);
   }
+  const inboundId = (inboundRow as { id: string }).id;
 
-  // Save the inbound message + bump conversation metadata.
-  await db.from("messages").insert({
-    agent_id: agentId,
-    conversation_id: conversation.id,
-    direction: "inbound",
-    sender: "contact",
-    content: resolved.text,
-    wasender_id: inbound.messageId,
-  });
+  // Turn whatever the client sent (text, voice, image, document…) into text the
+  // agent can reason about, and decide whether to answer with a voice note.
+  const resolved = await resolveInboundContent(inbound, ctx);
+  if (!resolved.text) {
+    await db.from("messages").delete().eq("id", inboundId);
+    return { status: "ignored", reason: "unsupported_or_empty" };
+  }
+  if (resolved.text !== inbound.text.trim()) {
+    await db.from("messages").update({ content: resolved.text }).eq("id", inboundId);
+  }
   await db
     .from("conversations")
     .update({
@@ -109,6 +133,12 @@ export async function handleInboundMessage(
     })
     .eq("id", conversation.id);
 
+  // Excluded (personal) contact: the message stays visible in the dashboard,
+  // but the agent never answers it.
+  if (conversation.status === "exclu") {
+    return { status: "ignored", reason: "contact_exclu", conversationId: conversation.id };
+  }
+
   // The prospect just replied — stop any pending follow-up chain (§16).
   await stopFollowUps(db, conversation.id, "responded");
 
@@ -117,8 +147,24 @@ export async function handleInboundMessage(
   });
 
   // Decide whether the AI should reply (this agent's own config).
-  const aiShouldReply =
+  let aiShouldReply =
     ctx.agent.ai_enabled && conversation.ai_enabled && conversation.mode === "ai";
+
+  // An AI handoff nobody picked up must not leave the client unanswered forever
+  // (a human takeover is never overridden — see lib/handoff.ts).
+  if (!aiShouldReply && ctx.agent.ai_enabled && canAutoResume(conversation)) {
+    await safeConversationUpdate(
+      db,
+      conversation.id,
+      { mode: "ai", ai_enabled: true, status: "prospect_tiede" },
+      { silenced_by: null, silenced_at: null },
+    );
+    await logAudit(db, agentId, "ai", "ai_auto_resumed", conversation.id, {
+      silenced_at: conversation.silenced_at ?? null,
+    });
+    Object.assign(conversation, { mode: "ai", ai_enabled: true, status: "prospect_tiede" });
+    aiShouldReply = true;
+  }
 
   if (!aiShouldReply) {
     return {
@@ -126,6 +172,22 @@ export async function handleInboundMessage(
       conversationId: conversation.id,
       reason: "ai_disabled_or_human_mode",
     };
+  }
+
+  // Clients often send several short messages in a row ("Prix" / "L'original" /
+  // "Photo"): wait a moment and answer once — from the latest message's run,
+  // with the whole burst in context — instead of overlapping replies.
+  await new Promise((r) => setTimeout(r, BURST_WINDOW_MS));
+  const { data: latestInbound } = await db
+    .from("messages")
+    .select("id")
+    .eq("conversation_id", conversation.id)
+    .eq("direction", "inbound")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestInbound && (latestInbound as { id: string }).id !== inboundId) {
+    return { status: "processed", conversationId: conversation.id, reason: "burst_merged_into_next_message" };
   }
 
   // Deterministic personal-message filter — runs before any AI call so no LLM
@@ -189,7 +251,7 @@ export async function handleInboundMessage(
     getActiveLearnings(db, agentId),
   ]);
 
-  const result = await generateAgentResult({
+  const generationOptions = {
     messages: history,
     settings: ctx.agent,
     knowledge,
@@ -207,7 +269,22 @@ export async function handleInboundMessage(
       summary: conversation.summary,
     },
     openaiKey: ctx.openaiKey,
-  });
+  };
+  let result = await generateAgentResult(generationOptions);
+
+  // The model may only go silent for good reasons (explicit request for a human
+  // or complaint; a first contact that isn't a client). Otherwise — "Prix", an
+  // unknown service, a photo it can't identify — answer the client instead of
+  // switching the AI off for them forever.
+  if (isSilentHandoff(result.status) && !handoffJustified(result.status, history)) {
+    await logAudit(db, agentId, "ai", "handoff_blocked", conversation.id, {
+      status: result.status,
+      preview: resolved.text.slice(0, 100),
+    });
+    result = await generateAgentResult({ ...generationOptions, extraInstruction: NO_HANDOFF_INSTRUCTION });
+    if (isSilentHandoff(result.status)) result = { ...result, status: "prospect_tiede" };
+    if (!result.reply.trim()) result = { ...result, reply: NEUTRAL_FOLLOW_UP_REPLY };
+  }
 
   // The LLM call failed and a canned reply is being used: keep the exact reason
   // in audit_logs so production failures are diagnosable without server logs.
@@ -356,9 +433,10 @@ async function applyAgentResult(
   // Only humain_requis and exclu stop the AI; qualified/hot prospects keep getting replies.
   const isHandoff = isSilentHandoff(result.status);
 
-  await db
-    .from("conversations")
-    .update({
+  await safeConversationUpdate(
+    db,
+    conversation.id,
+    {
       status: result.status,
       score: result.score,
       intent: result.intent,
@@ -368,8 +446,10 @@ async function applyAgentResult(
       last_message_preview: (result.reply ?? "").slice(0, 160),
       // Silence the AI on handoffs and excluded (personal) contacts.
       ...(isHandoff ? { mode: "human", ai_enabled: false } : {}),
-    })
-    .eq("id", conversation.id);
+    },
+    // Marked as an AI decision so it can auto-resume if no human takes over.
+    isHandoff ? { silenced_by: "ai", silenced_at: new Date().toISOString() } : {},
+  );
 
   // Persist contact facts extracted by the AI (name, city, need, business_type).
   // Only overwrite a field when the AI found a non-empty value AND the field is
@@ -681,10 +761,15 @@ async function getRecentHistory(
   const rows = ((data as Pick<Message, "sender" | "content">[]) ?? []).reverse();
   return rows
     .filter((m) => m.sender !== "system")
-    .map((m) => ({
-      role: m.sender === "contact" ? ("user" as const) : ("assistant" as const),
-      content: m.content,
-    }));
+    .map((m) => {
+      // Sent attachments are stored as "[image] URL\ncaption". Shown raw, the
+      // model imitated that syntax in its replies ("Voici la photo : [image] …").
+      const media = /^\[(image|video|document|audio)\] (\S+)(?:\n([\s\S]*))?$/.exec(m.content.trim());
+      const content = media
+        ? `(${media[1] === "image" ? "photo" : "fichier"} déjà envoyé au client${media[3] ? ` : ${media[3].trim()}` : ""} — ${media[2]})`
+        : m.content;
+      return { role: m.sender === "contact" ? ("user" as const) : ("assistant" as const), content };
+    });
 }
 
 async function getActiveKnowledge(db: Db, agentId: string): Promise<KnowledgeBaseEntry[]> {
@@ -743,6 +828,24 @@ async function getActiveProducts(db: Db, agentId: string): Promise<Product[]> {
  */
 function isSilentHandoff(status: LeadStatus): boolean {
   return status === "humain_requis" || status === "exclu";
+}
+
+/**
+ * Conversation update that also writes the silence marker (silenced_by/at)
+ * when migration 0015 is applied; before that, retries without it.
+ */
+async function safeConversationUpdate(
+  db: Db,
+  id: string,
+  patch: Record<string, unknown>,
+  marker: Record<string, unknown>,
+) {
+  const { error } = await db.from("conversations").update({ ...patch, ...marker }).eq("id", id);
+  if (error && /silenced_/.test(error.message)) {
+    await db.from("conversations").update(patch).eq("id", id);
+  } else if (error) {
+    console.error(`[engine] conversation ${id} update failed: ${error.message}`);
+  }
 }
 
 function emailTriggerFor(status: LeadStatus): EmailTrigger | null {

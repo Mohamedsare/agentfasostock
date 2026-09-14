@@ -18,14 +18,34 @@ function revalidateConversation(id?: string) {
   revalidatePath("/dashboard");
 }
 
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+/** A human silenced the AI: the engine must never auto-resume it (lib/handoff.ts). */
+const ADMIN_SILENCE = () => ({ silenced_by: "admin", silenced_at: new Date().toISOString() });
+const NO_SILENCE = { silenced_by: null, silenced_at: null };
+
+/**
+ * Update a conversation together with its silence marker; still works before
+ * migration 0015 (retries without the marker columns).
+ */
+async function updateConversation(
+  supabase: Supabase,
+  id: string,
+  patch: Record<string, unknown>,
+  marker: Record<string, unknown>,
+) {
+  const { error } = await supabase.from("conversations").update({ ...patch, ...marker }).eq("id", id);
+  if (error && /silenced_/.test(error.message)) {
+    return (await supabase.from("conversations").update(patch).eq("id", id)).error;
+  }
+  return error;
+}
+
 /** Take a conversation over manually (pause the AI). */
 export async function takeOverConversation(id: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("conversations")
-    .update({ mode: "human", ai_enabled: false })
-    .eq("id", id);
+  const error = await updateConversation(supabase, id, { mode: "human", ai_enabled: false }, ADMIN_SILENCE());
   if (error) return { ok: false, error: error.message };
   revalidateConversation(id);
   return { ok: true };
@@ -35,10 +55,7 @@ export async function takeOverConversation(id: string): Promise<ActionResult> {
 export async function reactivateAi(id: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("conversations")
-    .update({ mode: "ai", ai_enabled: true })
-    .eq("id", id);
+  const error = await updateConversation(supabase, id, { mode: "ai", ai_enabled: true }, NO_SILENCE);
   if (error) return { ok: false, error: error.message };
   revalidateConversation(id);
   return { ok: true };
@@ -91,15 +108,17 @@ export async function sendManualMessage(
     content,
     wasender_id: sent.id ?? null,
   });
-  await supabase
-    .from("conversations")
-    .update({
+  await updateConversation(
+    supabase,
+    conversationId,
+    {
       mode: "human",
       ai_enabled: false,
       last_message_at: new Date().toISOString(),
       last_message_preview: content.slice(0, 160),
-    })
-    .eq("id", conversationId);
+    },
+    ADMIN_SILENCE(),
+  );
 
   revalidateConversation(conversationId);
   if (!sent.ok) {
@@ -112,10 +131,12 @@ export async function sendManualMessage(
 export async function unexcludeContact(conversationId: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("conversations")
-    .update({ status: "nouveau", mode: "ai", ai_enabled: true })
-    .eq("id", conversationId);
+  const error = await updateConversation(
+    supabase,
+    conversationId,
+    { status: "nouveau", mode: "ai", ai_enabled: true },
+    NO_SILENCE,
+  );
   if (error) return { ok: false, error: error.message };
   revalidateConversation(conversationId);
   return { ok: true };
@@ -128,10 +149,12 @@ export async function unexcludeContact(conversationId: string): Promise<ActionRe
 export async function excludeContact(conversationId: string): Promise<ActionResult> {
   if (!isSupabaseConfigured) return { ok: false, error: "Supabase non configuré." };
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("conversations")
-    .update({ status: "exclu", mode: "human", ai_enabled: false })
-    .eq("id", conversationId);
+  const error = await updateConversation(
+    supabase,
+    conversationId,
+    { status: "exclu", mode: "human", ai_enabled: false },
+    ADMIN_SILENCE(),
+  );
   if (error) return { ok: false, error: error.message };
   revalidateConversation(conversationId);
   return { ok: true };

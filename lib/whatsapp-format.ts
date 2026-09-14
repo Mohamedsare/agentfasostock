@@ -16,6 +16,9 @@ export function formatWhatsAppReply(input: string): string {
   if (!input) return input;
   let text = input.replace(/\r\n?/g, "\n");
 
+  // Media placeholders the model copies from the history ("Voici la photo : [image] …").
+  text = text.replace(/\[(?:image|photo|vid[ée]o|document|audio|fichier)\]\s*:?\s*/gi, "");
+
   // Markdown → WhatsApp emphasis.
   text = text.replace(/\*\*\s*([^*\n]+?)\s*\*\*/g, "*$1*");
   text = text.replace(/__([^_\n]+?)__/g, "_$1_");
