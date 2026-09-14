@@ -5,7 +5,15 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/env";
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
-import { previewSource, syncProductSource, validateSourceUrl, type NormalizedProduct, type SyncResult } from "@/lib/product-sync";
+import {
+  fetchFasostockStores,
+  previewSource,
+  syncProductSource,
+  validateSourceUrl,
+  type FasostockStore,
+  type NormalizedProduct,
+  type SyncResult,
+} from "@/lib/product-sync";
 import type { ActionResult } from "@/lib/actions/conversations";
 import type { ProductSource } from "@/lib/types";
 
@@ -30,8 +38,15 @@ const sourceSchema = z.object({
   /** Empty string = keep the stored key; null = remove it. */
   apiKey: z.string().max(2000).nullable().optional(),
   defaultQuery: z.string().trim().max(500).optional(),
-  perPage: z.number().int().min(1).max(200),
-  syncIntervalMinutes: z.number().int().min(15).max(10080),
+  perPage: z.number().int().min(1).max(500),
+  paginationStyle: z.enum(["auto", "page", "offset"]),
+  incrementalParam: z
+    .string()
+    .trim()
+    .max(60)
+    .regex(/^[A-Za-z0-9_.-]*$/, "Nom de paramètre incrémental invalide.")
+    .optional(),
+  syncIntervalMinutes: z.number().int().min(10).max(10080),
   fieldMapping: mappingSchema,
   isActive: z.boolean(),
 });
@@ -65,6 +80,8 @@ export async function saveProductSource(
     auth_key_name: v.authKeyName || null,
     default_query: v.defaultQuery || null,
     per_page: v.perPage,
+    pagination_style: v.paginationStyle,
+    incremental_param: v.incrementalParam || null,
     sync_interval_minutes: v.syncIntervalMinutes,
     field_mapping: cleanMapping(v.fieldMapping),
     is_active: v.isActive,
@@ -118,6 +135,7 @@ export async function testProductSource(
         auth_key_name: v.authKeyName || null,
         default_query: v.defaultQuery || null,
         per_page: v.perPage,
+        pagination_style: v.paginationStyle,
         field_mapping: cleanMapping(v.fieldMapping),
       },
       apiKey,
@@ -125,6 +143,22 @@ export async function testProductSource(
     return { ok: true, ...preview };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Échec du test." };
+  }
+}
+
+/** FasoStock quick connect: list the stores readable with this API key. */
+export async function listFasostockStores(
+  apiKey: string,
+): Promise<ActionResult & { company?: string | null; stores?: FasostockStore[] }> {
+  const key = apiKey?.trim();
+  if (!key) return { ok: false, error: "Collez votre clé API FasoStock." };
+  try {
+    const res = await fetchFasostockStores(key);
+    return { ok: true, ...res };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (/HTTP 40[13]/.test(message)) return { ok: false, error: "Clé API FasoStock refusée — vérifiez-la ou recréez-en une." };
+    return { ok: false, error: message || "Impossible de contacter FasoStock." };
   }
 }
 

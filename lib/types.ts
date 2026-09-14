@@ -186,6 +186,9 @@ export interface Product {
 
 export type ProductSourceAuthType = "none" | "bearer" | "header" | "query";
 
+/** auto = detected from the first response (next_offset/offset → offset, else page). */
+export type ProductPaginationStyle = "auto" | "page" | "offset";
+
 /** JSON paths (dot notation) mapping the API payload to product fields. Empty = auto-detect. */
 export interface ProductFieldMapping {
   items?: string;
@@ -214,6 +217,9 @@ export interface ProductSource {
   api_key_encrypted: string | null;
   default_query: string | null;
   per_page: number;
+  pagination_style: ProductPaginationStyle;
+  /** "Changed since" query param (e.g. updated_since). Null = always full sync. */
+  incremental_param: string | null;
   field_mapping: ProductFieldMapping;
   sync_interval_minutes: number;
   is_active: boolean;

@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { fr } from "date-fns/locale";
 import {
-  Plug, Plus, RefreshCw, Loader2, Pencil, Trash2, CheckCircle2, AlertTriangle, FlaskConical, ChevronDown,
+  Plug, Plus, RefreshCw, Loader2, Pencil, Trash2, CheckCircle2, AlertTriangle, FlaskConical, ChevronDown, Store,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  saveProductSource, deleteProductSource, testProductSource, runProductSourceSync, type ProductSourceInput,
+  saveProductSource, deleteProductSource, testProductSource, runProductSourceSync, listFasostockStores,
+  type ProductSourceInput,
 } from "@/lib/actions/product-sources";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,16 +23,19 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { ProductFieldMapping, ProductSourceAuthType, ProductSourceView } from "@/lib/types";
+import type {
+  ProductFieldMapping, ProductPaginationStyle, ProductSourceAuthType, ProductSourceView,
+} from "@/lib/types";
 
 interface AgentOption { id: string; name: string }
 
 type Draft = Omit<ProductSourceInput, "apiKey"> & { apiKey: string; clearKey: boolean };
 
 type TestResult = Awaited<ReturnType<typeof testProductSource>>;
+type StoresResult = Awaited<ReturnType<typeof listFasostockStores>>;
 
 const MAPPING_FIELDS: { key: keyof ProductFieldMapping; label: string; hint: string }[] = [
-  { key: "items", label: "Liste des produits", hint: "data" },
+  { key: "items", label: "Liste des produits", hint: "products" },
   { key: "id", label: "Identifiant", hint: "id" },
   { key: "name", label: "Nom", hint: "name" },
   { key: "description", label: "Description", hint: "description" },
@@ -40,14 +44,15 @@ const MAPPING_FIELDS: { key: keyof ProductFieldMapping; label: string; hint: str
   { key: "images", label: "Images", hint: "images" },
   { key: "sku", label: "Référence / SKU", hint: "sku" },
   { key: "category", label: "Catégorie", hint: "category.name" },
-  { key: "brand", label: "Marque", hint: "brand" },
+  { key: "brand", label: "Marque", hint: "brand.name" },
   { key: "stock", label: "Quantité en stock", hint: "stock" },
   { key: "in_stock", label: "En stock (oui/non)", hint: "in_stock" },
   { key: "url", label: "Lien produit", hint: "url" },
 ];
 
 const INTERVALS = [
-  { value: 15, label: "Toutes les 15 min" },
+  { value: 10, label: "Toutes les 10 min" },
+  { value: 30, label: "Toutes les 30 min" },
   { value: 60, label: "Toutes les heures" },
   { value: 360, label: "Toutes les 6 h" },
   { value: 1440, label: "Une fois par jour" },
@@ -63,8 +68,10 @@ function emptyDraft(agentId: string): Draft {
     apiKey: "",
     clearKey: false,
     defaultQuery: "",
-    perPage: 50,
-    syncIntervalMinutes: 60,
+    perPage: 100,
+    paginationStyle: "auto",
+    incrementalParam: "",
+    syncIntervalMinutes: 30,
     fieldMapping: {},
     isActive: true,
   };
@@ -94,17 +101,29 @@ export function ProductSourcesPanel({
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<ProductSourceView | null>(null);
   const [draft, setDraft] = React.useState<Draft>(emptyDraft(activeAgentId ?? agents[0]?.id ?? ""));
-  const [showMapping, setShowMapping] = React.useState(false);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [test, setTest] = React.useState<TestResult | null>(null);
+  // FasoStock quick connect
+  const [fsKey, setFsKey] = React.useState("");
+  const [loadingStores, setLoadingStores] = React.useState(false);
+  const [stores, setStores] = React.useState<StoresResult | null>(null);
+  const [storeId, setStoreId] = React.useState("");
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((d) => ({ ...d, [key]: value }));
+
+  function resetQuickConnect() {
+    setFsKey("");
+    setStores(null);
+    setStoreId("");
+  }
 
   function openCreate() {
     setEditing(null);
     setDraft(emptyDraft(activeAgentId ?? agents[0]?.id ?? ""));
     setTest(null);
-    setShowMapping(false);
+    setShowAdvanced(false);
+    resetQuickConnect();
     setOpen(true);
   }
 
@@ -120,13 +139,49 @@ export function ProductSourcesPanel({
       clearKey: false,
       defaultQuery: s.default_query ?? "",
       perPage: s.per_page,
+      paginationStyle: s.pagination_style ?? "auto",
+      incrementalParam: s.incremental_param ?? "",
       syncIntervalMinutes: s.sync_interval_minutes,
       fieldMapping: s.field_mapping ?? {},
       isActive: s.is_active,
     });
     setTest(null);
-    setShowMapping(Object.keys(s.field_mapping ?? {}).length > 0);
+    setShowAdvanced(Object.keys(s.field_mapping ?? {}).length > 0 || Boolean(s.incremental_param));
+    resetQuickConnect();
     setOpen(true);
+  }
+
+  async function loadStores() {
+    setLoadingStores(true);
+    setStores(null);
+    setStoreId("");
+    try {
+      const res = await listFasostockStores(fsKey);
+      setStores(res);
+      if (!res.ok) toast.error(res.error ?? "Échec.");
+      else if (res.stores?.length === 1) pickStore(res.stores[0].id, res);
+    } finally {
+      setLoadingStores(false);
+    }
+  }
+
+  function pickStore(id: string, from: StoresResult | null = stores) {
+    const store = from?.stores?.find((s) => s.id === id);
+    if (!store) return;
+    setStoreId(id);
+    setTest(null);
+    setDraft((d) => ({
+      ...d,
+      name: `FasoStock — ${store.name}`,
+      baseUrl: store.products_url,
+      authType: "bearer",
+      authKeyName: "",
+      apiKey: fsKey.trim(),
+      clearKey: false,
+      perPage: 500,
+      paginationStyle: "offset",
+      incrementalParam: "",
+    }));
   }
 
   async function runTest() {
@@ -195,7 +250,7 @@ export function ProductSourcesPanel({
           <div>
             <p className="font-semibold leading-tight">Connexion API produits</p>
             <p className="text-sm text-muted-foreground">
-              Branchez l&apos;API de votre boutique : l&apos;agent accède automatiquement à tout le catalogue (prix, stock, photos, détails).
+              Branchez FasoStock ou l&apos;API de votre boutique : l&apos;agent accède automatiquement à tout le catalogue (prix, stock, conditionnements, photos).
             </p>
           </div>
         </div>
@@ -255,12 +310,56 @@ export function ProductSourcesPanel({
           <DialogHeader>
             <DialogTitle>{editing ? "Modifier la source API" : "Connecter une API produits"}</DialogTitle>
             <DialogDescription>
-              L&apos;agent appellera <span className="font-mono">?page=…&amp;per_page=…</span> puis{" "}
-              <span className="font-mono">updated_since=…&amp;sort=updated</span> pour rester à jour.
+              Les produits sont synchronisés automatiquement et consultés par l&apos;agent à chaque message.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-1">
+            {!editing && (
+              <div className="space-y-2.5 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <Store className="size-4 text-primary" /> Connexion rapide FasoStock
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Collez la clé créée dans FasoStock → Intégrations API, puis choisissez la boutique.
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    className="font-mono text-sm"
+                    placeholder="fs_…"
+                    value={fsKey}
+                    onChange={(e) => setFsKey(e.target.value)}
+                    aria-label="Clé API FasoStock"
+                  />
+                  <Button variant="outline" onClick={loadStores} disabled={!fsKey.trim() || loadingStores}>
+                    {loadingStores && <Loader2 className="size-4 animate-spin" />}
+                    Charger mes boutiques
+                  </Button>
+                </div>
+                {stores?.ok && (
+                  stores.stores && stores.stores.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <Label>Boutique{stores.company ? ` — ${stores.company}` : ""}</Label>
+                      <Select value={storeId} onValueChange={(v) => pickStore(v)}>
+                        <SelectTrigger><SelectValue placeholder="Choisir une boutique" /></SelectTrigger>
+                        <SelectContent>
+                          {stores.stores.map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}{s.code ? ` (${s.code})` : ""}{s.is_primary ? " · principale" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-destructive">Aucune boutique accessible avec cette clé.</p>
+                  )
+                )}
+              </div>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-2">
               {!editing && agents.length > 1 && (
                 <div className="space-y-1.5 sm:col-span-2">
@@ -296,7 +395,7 @@ export function ProductSourcesPanel({
               <Input
                 id="src-url"
                 className="font-mono text-sm"
-                placeholder="https://srfaso.com/api/v1/products"
+                placeholder="https://www.fasostock.com/api/v1/stores/{storeId}/products"
                 value={draft.baseUrl}
                 onChange={(e) => set("baseUrl", e.target.value)}
               />
@@ -308,7 +407,7 @@ export function ProductSourcesPanel({
                 <Input
                   id="src-query"
                   className="font-mono text-sm"
-                  placeholder="in_stock=true&category=moteur"
+                  placeholder="in_stock=true"
                   value={draft.defaultQuery}
                   onChange={(e) => set("defaultQuery", e.target.value)}
                 />
@@ -319,9 +418,9 @@ export function ProductSourcesPanel({
                   id="src-per-page"
                   type="number"
                   min={1}
-                  max={200}
+                  max={500}
                   value={draft.perPage}
-                  onChange={(e) => set("perPage", Number(e.target.value) || 50)}
+                  onChange={(e) => set("perPage", Number(e.target.value) || 100)}
                 />
               </div>
             </div>
@@ -372,32 +471,61 @@ export function ProductSourcesPanel({
             <div className="rounded-lg border border-border">
               <button
                 type="button"
-                onClick={() => setShowMapping((v) => !v)}
+                onClick={() => setShowAdvanced((v) => !v)}
                 className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-medium"
-                aria-expanded={showMapping}
+                aria-expanded={showAdvanced}
               >
-                Correspondance des champs (avancé)
-                <ChevronDown className={cn("size-4 transition-transform", showMapping && "rotate-180")} />
+                Options avancées
+                <ChevronDown className={cn("size-4 transition-transform", showAdvanced && "rotate-180")} />
               </button>
-              {showMapping && (
-                <div className="space-y-3 border-t border-border p-3">
-                  <p className="text-xs text-muted-foreground">
-                    Laissez vide pour la détection automatique. Utilisez des chemins pointés, ex.{" "}
-                    <span className="font-mono">category.name</span>.
-                  </p>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {MAPPING_FIELDS.map((f) => (
-                      <div key={f.key} className="flex items-center gap-2">
-                        <Label htmlFor={`map-${f.key}`} className="w-32 shrink-0 text-xs font-normal">{f.label}</Label>
-                        <Input
-                          id={`map-${f.key}`}
-                          className="h-8 font-mono text-xs"
-                          placeholder={f.hint}
-                          value={draft.fieldMapping[f.key] ?? ""}
-                          onChange={(e) => set("fieldMapping", { ...draft.fieldMapping, [f.key]: e.target.value })}
-                        />
-                      </div>
-                    ))}
+              {showAdvanced && (
+                <div className="space-y-4 border-t border-border p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label>Pagination</Label>
+                      <Select
+                        value={draft.paginationStyle}
+                        onValueChange={(v) => set("paginationStyle", v as ProductPaginationStyle)}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">Détection automatique</SelectItem>
+                          <SelectItem value="offset">limit / offset</SelectItem>
+                          <SelectItem value="page">page / per_page</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="src-incremental">Paramètre « modifié depuis »</Label>
+                      <Input
+                        id="src-incremental"
+                        className="font-mono text-sm"
+                        placeholder="updated_since (vide = synchro complète)"
+                        value={draft.incrementalParam}
+                        onChange={(e) => set("incrementalParam", e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Correspondance des champs — laissez vide pour la détection automatique. Chemins pointés acceptés, ex.{" "}
+                      <span className="font-mono">category.name</span>.
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {MAPPING_FIELDS.map((f) => (
+                        <div key={f.key} className="flex items-center gap-2">
+                          <Label htmlFor={`map-${f.key}`} className="w-32 shrink-0 text-xs font-normal">{f.label}</Label>
+                          <Input
+                            id={`map-${f.key}`}
+                            className="h-8 font-mono text-xs"
+                            placeholder={f.hint}
+                            value={draft.fieldMapping[f.key] ?? ""}
+                            onChange={(e) => set("fieldMapping", { ...draft.fieldMapping, [f.key]: e.target.value })}
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -414,7 +542,7 @@ export function ProductSourcesPanel({
                 {test.ok ? (
                   <>
                     <p className="flex items-center gap-2 font-medium text-success">
-                      <CheckCircle2 className="size-4" /> Connexion réussie — {test.total} produit(s) sur la 1ʳᵉ page
+                      <CheckCircle2 className="size-4" /> Connexion réussie — {test.total} produit(s) dans le catalogue
                     </p>
                     {test.rawKeys && test.rawKeys.length > 0 && (
                       <p className="mt-1 font-mono text-xs text-muted-foreground">Champs reçus : {test.rawKeys.join(", ")}</p>
@@ -426,7 +554,7 @@ export function ProductSourcesPanel({
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={p.images[0]} alt="" className="size-8 rounded object-cover" />
                           ) : (
-                            <span className="size-8 rounded bg-muted" />
+                            <span className="size-8 shrink-0 rounded bg-muted" />
                           )}
                           <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
                           <span className="text-muted-foreground">

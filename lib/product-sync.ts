@@ -26,6 +26,16 @@ const FULL_SYNC_EVERY_MS = 24 * 60 * 60 * 1000;
 /** Overlap on incremental syncs so clock skew never drops an update. */
 const INCREMENTAL_OVERLAP_MS = 5 * 60 * 1000;
 const MAX_ATTRIBUTES = 25;
+const MAX_PER_PAGE = 500;
+
+export const FASOSTOCK_API_ORIGIN = "https://www.fasostock.com";
+
+/** Friendly French labels for common nested catalog fields. */
+const ATTRIBUTE_LABELS: Record<string, string> = {
+  packagings: "Conditionnements",
+  unit: "Unité",
+  promotion: "Promotion",
+};
 
 /** Candidate keys tried in order when a field isn't explicitly mapped. */
 const AUTO_FIELDS: Record<Exclude<keyof ProductFieldMapping, "items">, string[]> = {
@@ -166,22 +176,54 @@ function extraAttributes(item: Json): Record<string, string | number | boolean> 
   for (const [key, value] of Object.entries(item as Record<string, Json>)) {
     if (Object.keys(out).length >= MAX_ATTRIBUTES) break;
     if (ATTRIBUTE_BLACKLIST.has(key)) continue;
-    if (typeof value === "number" || typeof value === "boolean") out[key] = value;
-    else if (typeof value === "string" && value.trim() && value.length <= 300) out[key] = value.trim();
-    else if (Array.isArray(value) && value.every((x) => typeof x === "string" || typeof x === "number")) {
+    const label = ATTRIBUTE_LABELS[key] ?? key;
+    if (typeof value === "number" || typeof value === "boolean") out[label] = value;
+    else if (typeof value === "string" && value.trim() && value.length <= 300) out[label] = value.trim();
+    else if (Array.isArray(value) && value.length && value.every((x) => typeof x === "string" || typeof x === "number")) {
       const joined = value.join(", ");
-      if (joined && joined.length <= 300) out[key] = joined;
+      if (joined.length <= 300) out[label] = joined;
+    } else if (Array.isArray(value) && value.length && value.every((x) => x && typeof x === "object" && !Array.isArray(x))) {
+      // e.g. packagings: [{ label: "Carton", quantity: 10, price: 500000, unit_price: 50000 }]
+      const summary = value
+        .slice(0, 6)
+        .map((x) => describeObject(x as Record<string, Json>))
+        .filter(Boolean)
+        .join(" | ");
+      if (summary) out[label] = summary.slice(0, 500);
     } else if (value && typeof value === "object" && !Array.isArray(value)) {
       // One level of nesting, e.g. specs: { puissance: "125cc" }
       for (const [k2, v2] of Object.entries(value as Record<string, Json>)) {
         if (Object.keys(out).length >= MAX_ATTRIBUTES) break;
+        if (k2 === "id") continue;
         if (typeof v2 === "string" || typeof v2 === "number" || typeof v2 === "boolean") {
-          out[`${key}.${k2}`] = typeof v2 === "string" ? v2.slice(0, 300) : v2;
+          out[`${label}.${k2}`] = typeof v2 === "string" ? v2.slice(0, 300) : v2;
         }
       }
     }
   }
   return out;
+}
+
+/** One-line description of a nested object: "Carton de 10 : 500000 (soit 50000/pièce)". */
+function describeObject(o: Record<string, Json>): string | null {
+  const label = asText(o.label ?? o.name ?? o.title ?? null);
+  const qty = asNumber(o.quantity ?? o.qty ?? null);
+  const price = asNumber(o.price ?? null);
+  const unitPrice = asNumber(o.unit_price ?? null);
+  if (label || qty != null || price != null) {
+    return [
+      label,
+      qty != null ? `de ${qty}` : null,
+      price != null ? `: ${price}` : null,
+      unitPrice != null ? `(soit ${unitPrice}/pièce)` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  const parts = Object.entries(o)
+    .filter(([k, v]) => k !== "id" && (typeof v === "string" || typeof v === "number"))
+    .map(([k, v]) => `${k}: ${v}`);
+  return parts.length ? parts.join(", ") : null;
 }
 
 export function extractItems(payload: Json, mapping: ProductFieldMapping): Json[] {
@@ -210,6 +252,8 @@ export function normalizeProduct(
   item: Json,
   mapping: ProductFieldMapping,
   baseUrl: string,
+  /** Currency declared once on the response envelope (e.g. FasoStock `currency`). */
+  defaultCurrency = "XOF",
 ): NormalizedProduct | null {
   const name = asText(pick(item, mapping.name, AUTO_FIELDS.name));
   const externalId = asText(pick(item, mapping.id, AUTO_FIELDS.id)) ?? name;
@@ -218,13 +262,20 @@ export function normalizeProduct(
   const stock = asNumber(pick(item, mapping.stock, AUTO_FIELDS.stock));
   const inStockRaw = asBool(pick(item, mapping.in_stock, AUTO_FIELDS.in_stock));
   const url = asText(pick(item, mapping.url, AUTO_FIELDS.url));
+  const price = asNumber(pick(item, mapping.price, AUTO_FIELDS.price));
+  const attributes = extraAttributes(item);
+  // `price` is today's price (promotion applied); keep the catalog price so the agent can mention the discount.
+  const catalogPrice = asNumber(getPath(item, "sale_price") ?? null);
+  if (catalogPrice != null && price != null && catalogPrice > price) {
+    attributes["Prix catalogue (avant promotion)"] = catalogPrice;
+  }
 
   return {
     external_id: externalId.slice(0, 200),
     name: name.slice(0, 300),
     description: asText(pick(item, mapping.description, AUTO_FIELDS.description))?.slice(0, 4000) ?? null,
-    price: asNumber(pick(item, mapping.price, AUTO_FIELDS.price)),
-    currency: (asText(pick(item, mapping.currency, AUTO_FIELDS.currency)) ?? "XOF").toUpperCase().slice(0, 8),
+    price,
+    currency: (asText(pick(item, mapping.currency, AUTO_FIELDS.currency)) ?? defaultCurrency).toUpperCase().slice(0, 8),
     images: asImages(pick(item, mapping.images, AUTO_FIELDS.images), baseUrl),
     sku: asText(pick(item, mapping.sku, AUTO_FIELDS.sku)),
     category: asText(pick(item, mapping.category, AUTO_FIELDS.category)),
@@ -232,7 +283,7 @@ export function normalizeProduct(
     stock_quantity: stock != null ? Math.round(stock) : null,
     in_stock: inStockRaw ?? (stock != null ? stock > 0 : null),
     product_url: url ? safeAbsolute(url, baseUrl) : null,
-    attributes: extraAttributes(item),
+    attributes,
   };
 }
 
@@ -270,7 +321,10 @@ export function validateSourceUrl(raw: string): string | null {
 }
 
 interface FetchCtx {
-  source: Pick<ProductSource, "base_url" | "auth_type" | "auth_key_name" | "default_query" | "per_page">;
+  source: Pick<
+    ProductSource,
+    "base_url" | "auth_type" | "auth_key_name" | "default_query" | "per_page" | "pagination_style"
+  >;
   apiKey: string | null;
 }
 
@@ -353,12 +407,19 @@ async function walkPages(
   params: Record<string, string>,
   onPage: (items: NormalizedProduct[]) => Promise<void>,
 ): Promise<{ pages: number; fetched: number }> {
-  const perPage = Math.min(Math.max(ctx.source.per_page || 50, 1), 200);
+  const perPage = clampPerPage(ctx.source.per_page);
   const headers = buildHeaders(ctx);
+  let style: PaginationStyle | null = ctx.source.pagination_style === "auto" ? null : ctx.source.pagination_style;
   let fetched = 0;
+  let offset = 0;
   let page = 1;
+  let previousFirstId: string | null = null;
   for (; page <= MAX_PAGES; page++) {
-    const payload = await fetchJson(buildUrl(ctx, { ...params, page: String(page), per_page: String(perPage) }), headers);
+    const payload = await fetchJson(
+      buildUrl(ctx, { ...params, ...paginationParams(style, page, offset, perPage) }),
+      headers,
+    );
+    style ??= detectPagination(payload);
     const raw = extractItems(payload, mapping);
     if (page === 1 && raw.length === 0 && !Array.isArray(payload) && !mapping.items) {
       const keys = payload && typeof payload === "object" ? Object.keys(payload as object).join(", ") : typeof payload;
@@ -367,14 +428,88 @@ async function walkPages(
         throw new Error(`Liste de produits introuvable dans la réponse (clés : ${keys}). Renseignez le chemin "items" dans le mapping.`);
       }
     }
+    const currency = envelopeCurrency(payload);
     const normalized = raw
-      .map((item) => normalizeProduct(item, mapping, ctx.source.base_url))
+      .map((item) => normalizeProduct(item, mapping, ctx.source.base_url, currency))
       .filter((p): p is NormalizedProduct => p !== null);
+    // An API that ignores our pagination params returns the first page forever — stop instead of looping.
+    const firstId = normalized[0]?.external_id ?? null;
+    if (page > 1 && firstId && firstId === previousFirstId) break;
+    previousFirstId = firstId;
     fetched += normalized.length;
     if (normalized.length) await onPage(normalized);
     if (isLastPage(payload, page, raw.length, perPage)) break;
+    const nextOffset = asNumber(getPath(payload, "next_offset") ?? getPath(payload, "meta.next_offset") ?? null);
+    offset = nextOffset != null && nextOffset > offset ? nextOffset : offset + raw.length;
   }
   return { pages: Math.min(page, MAX_PAGES), fetched };
+}
+
+type PaginationStyle = "page" | "offset";
+
+function clampPerPage(n: number | null | undefined): number {
+  return Math.min(Math.max(n || 50, 1), MAX_PER_PAGE);
+}
+
+function paginationParams(
+  style: PaginationStyle | null,
+  page: number,
+  offset: number,
+  perPage: number,
+): Record<string, string> {
+  const byPage = { page: String(page), per_page: String(perPage) };
+  const byOffset = { limit: String(perPage), offset: String(offset) };
+  if (style === "page") return byPage;
+  if (style === "offset") return byOffset;
+  // Auto, first request: send both until the response reveals which one the API uses.
+  return { ...byPage, ...byOffset };
+}
+
+function detectPagination(payload: Json): PaginationStyle {
+  const offsetKeys = ["next_offset", "offset", "meta.offset", "meta.next_offset", "pagination.offset"];
+  return offsetKeys.some((p) => getPath(payload, p) !== undefined) ? "offset" : "page";
+}
+
+function envelopeCurrency(payload: Json): string | undefined {
+  if (Array.isArray(payload)) return undefined;
+  return asText(getPath(payload, "currency") ?? getPath(payload, "meta.currency") ?? null) ?? undefined;
+}
+
+// ─────────────────────────── FasoStock ───────────────────────────
+
+export interface FasostockStore {
+  id: string;
+  name: string;
+  code: string | null;
+  address: string | null;
+  is_primary: boolean;
+  products_url: string;
+}
+
+/** List the stores a FasoStock API key can read (GET /api/v1/stores). */
+export async function fetchFasostockStores(
+  apiKey: string,
+): Promise<{ company: string | null; stores: FasostockStore[] }> {
+  const payload = await fetchJson(`${FASOSTOCK_API_ORIGIN}/api/v1/stores`, {
+    Accept: "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  });
+  const stores = extractItems(payload, { items: "stores" })
+    .map((s) => {
+      const o = (s ?? {}) as Record<string, Json>;
+      const id = asText(o.id ?? null);
+      if (!id) return null;
+      return {
+        id,
+        name: asText(o.name ?? null) ?? id,
+        code: asText(o.code ?? null),
+        address: asText(o.address ?? null),
+        is_primary: o.is_primary === true,
+        products_url: `${FASOSTOCK_API_ORIGIN}/api/v1/stores/${encodeURIComponent(id)}/products`,
+      };
+    })
+    .filter((s): s is FasostockStore => s !== null);
+  return { company: asText(getPath(payload, "company.name") ?? null), stores };
 }
 
 // ─────────────────────────── Public API ───────────────────────────
@@ -387,14 +522,21 @@ export async function previewSource(
   const invalid = validateSourceUrl(source.base_url);
   if (invalid) throw new Error(invalid);
   const ctx: FetchCtx = { source, apiKey };
-  const payload = await fetchJson(buildUrl(ctx, { page: "1", per_page: String(Math.min(source.per_page || 50, 50)) }), buildHeaders(ctx));
+  const style = source.pagination_style === "auto" ? null : source.pagination_style;
+  const payload = await fetchJson(
+    buildUrl(ctx, paginationParams(style, 1, 0, Math.min(clampPerPage(source.per_page), 50))),
+    buildHeaders(ctx),
+  );
   const raw = extractItems(payload, source.field_mapping);
   const first = raw[0];
+  const currency = envelopeCurrency(payload);
+  // Prefer the API's declared total (e.g. FasoStock `total`) over the first page size.
+  const declaredTotal = asNumber(getPath(payload, "total") ?? getPath(payload, "meta.total") ?? null);
   return {
-    total: raw.length,
+    total: declaredTotal ?? raw.length,
     samples: raw
       .slice(0, 5)
-      .map((i) => normalizeProduct(i, source.field_mapping, source.base_url))
+      .map((i) => normalizeProduct(i, source.field_mapping, source.base_url, currency))
       .filter((p): p is NormalizedProduct => p !== null),
     rawKeys: first && typeof first === "object" ? Object.keys(first as object) : [],
   };
@@ -455,8 +597,10 @@ export async function syncProductSource(
   const source = row as ProductSource;
 
   const lastFull = source.last_full_sync_at ? new Date(source.last_full_sync_at).getTime() : 0;
-  const mode =
-    opts.mode ?? (!source.last_sync_at || Date.now() - lastFull > FULL_SYNC_EVERY_MS ? "full" : "incremental");
+  // Incremental sync needs a "changed since" filter on the API; without one every run is a full sync.
+  const mode = !source.incremental_param
+    ? "full"
+    : opts.mode ?? (!source.last_sync_at || Date.now() - lastFull > FULL_SYNC_EVERY_MS ? "full" : "incremental");
 
   const startedAt = new Date();
   await db.from("product_sources").update({ last_sync_status: "running", last_sync_error: null }).eq("id", source.id);
@@ -469,10 +613,9 @@ export async function syncProductSource(
     const apiKey = decryptSecret(source.api_key_encrypted);
     const ctx: FetchCtx = { source, apiKey };
     const params: Record<string, string> = {};
-    if (mode === "incremental" && source.last_sync_at) {
+    if (mode === "incremental" && source.incremental_param && source.last_sync_at) {
       const since = new Date(new Date(source.last_sync_at).getTime() - INCREMENTAL_OVERLAP_MS);
-      params.updated_since = since.toISOString().replace(/\.\d{3}Z$/, "Z");
-      params.sort = "updated";
+      params[source.incremental_param] = since.toISOString().replace(/\.\d{3}Z$/, "Z");
     }
 
     const seen = new Set<string>();
@@ -513,12 +656,16 @@ export async function syncProductSource(
 }
 
 /** Cron entry: sync every active source whose interval has elapsed. */
-export async function syncDueProductSources(): Promise<{ checked: number; synced: number; failed: number }> {
+export async function syncDueProductSources(
+  opts: { agentId?: string } = {},
+): Promise<{ checked: number; synced: number; failed: number }> {
   const db = createAdminClient();
-  const { data } = await db
+  let query = db
     .from("product_sources")
     .select("id, last_sync_at, sync_interval_minutes, last_sync_status, updated_at")
     .eq("is_active", true);
+  if (opts.agentId) query = query.eq("agent_id", opts.agentId);
+  const { data } = await query;
   const rows = (data as Pick<ProductSource, "id" | "last_sync_at" | "sync_interval_minutes" | "last_sync_status" | "updated_at">[]) ?? [];
 
   const now = Date.now();
@@ -526,7 +673,7 @@ export async function syncDueProductSources(): Promise<{ checked: number; synced
     // Skip a sync still running unless it looks stuck (> 15 min).
     if (s.last_sync_status === "running" && now - new Date(s.updated_at).getTime() < 15 * 60 * 1000) return false;
     if (!s.last_sync_at) return true;
-    return now - new Date(s.last_sync_at).getTime() >= Math.max(s.sync_interval_minutes, 15) * 60 * 1000;
+    return now - new Date(s.last_sync_at).getTime() >= Math.max(s.sync_interval_minutes, 10) * 60 * 1000;
   });
 
   let synced = 0;

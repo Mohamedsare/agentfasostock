@@ -1,6 +1,7 @@
-import type { NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 import { parseWasenderWebhook } from "@/lib/wasender";
 import { handleInboundMessage } from "@/lib/engine";
+import { syncDueProductSources } from "@/lib/product-sync";
 import { resolveAgentBySession } from "@/lib/agents";
 import { serverEnv, features, isSupabaseConfigured } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -101,6 +102,16 @@ export async function POST(req: NextRequest) {
   if (!agentCtx) {
     return Response.json({ ok: true, ignored: true, reason: "unknown_session" });
   }
+
+  // Keep this agent's API catalog fresh without depending on the cron alone:
+  // once the reply is sent, resync any product source whose interval has elapsed.
+  after(async () => {
+    try {
+      await syncDueProductSources({ agentId: agentCtx.agent.id });
+    } catch (err) {
+      console.error("[webhooks/wasender] background product sync failed:", err);
+    }
+  });
 
   try {
     const result = await handleInboundMessage(inbound, agentCtx);

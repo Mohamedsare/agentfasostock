@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/products/sync",
-      "schedule": "30 * * * *"
+      "schedule": "*/10 * * * *"
     }
   ]
 }
