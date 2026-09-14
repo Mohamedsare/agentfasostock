@@ -21,6 +21,7 @@ import { classifyProspect } from "@/lib/classifier";
 import { scheduleFollowUp, stopFollowUps, isTerminalForFollowUp } from "@/lib/follow-ups";
 import type {
   AgentContext,
+  AgentMediaAttachment,
   AgentResult,
   Contact,
   Conversation,
@@ -219,9 +220,35 @@ export async function handleInboundMessage(
   let sent: SendResult = { ok: false, error: "no_reply" };
   let repliedByVoice = false;
   if (result.reply && result.status !== "spam" && !isHandoff) {
-    const delivery = await deliverReply(ctx, contact.phone, result.reply, resolved.replyAsVoice);
-    sent = delivery.sent;
-    repliedByVoice = delivery.byVoice;
+    let remainingMedia = result.media?.slice(0, 3) ?? [];
+
+    // One product photo: send it WITH the reply as its caption — a single
+    // WhatsApp message, so Wasender's account protection ("1 message / 5 s")
+    // can't reject the photo, and the client sees both together.
+    const solo =
+      remainingMedia.length === 1 &&
+      remainingMedia[0].type === "image" &&
+      !resolved.replyAsVoice &&
+      result.reply.length <= 1000
+        ? remainingMedia[0]
+        : null;
+    let captionSent = false;
+    if (solo && (await probeImage(solo.url)) !== "unsupported") {
+      const combined = await sendWhatsAppImage(contact.phone, solo.url, credsOf(ctx), result.reply);
+      if (combined.ok) {
+        sent = combined;
+        captionSent = true;
+        remainingMedia = [];
+      } else {
+        console.error(`[engine] photo+caption send failed, falling back to text then photo: ${combined.error}`);
+      }
+    }
+
+    if (!captionSent) {
+      const delivery = await deliverReply(ctx, contact.phone, result.reply, resolved.replyAsVoice);
+      sent = delivery.sent;
+      repliedByVoice = delivery.byVoice;
+    }
     if (!sent.ok) {
       console.error(`[engine] WhatsApp send failed for ${contact.phone}: ${sent.error}`);
     }
@@ -234,35 +261,45 @@ export async function handleInboundMessage(
       intent: result.intent,
       wasender_id: sent.id ?? null,
     });
+    if (captionSent && solo) {
+      // Same WhatsApp message as the text above; logged separately so the dashboard shows the photo.
+      await db.from("messages").insert({
+        agent_id: agentId,
+        conversation_id: conversation.id,
+        direction: "outbound",
+        sender: "ai",
+        content: `[image] ${solo.url}`,
+        intent: result.intent,
+        wasender_id: null,
+      });
+    }
 
-    // Send media attachments decided by the AI (images, documents, videos…).
-    // Each is sent sequentially with a short gap so WhatsApp orders them correctly.
-    if (result.media?.length) {
+    // Send media attachments decided by the AI (product photos, documents…).
+    // Sequential and spaced out: WhatsApp keeps the order and Wasender's
+    // message spacing doesn't reject the photos (429s are also retried).
+    if (remainingMedia.length) {
       const creds = credsOf(ctx);
-      for (const attachment of result.media.slice(0, 3)) {
-        await new Promise((r) => setTimeout(r, 300));
-        let mediaSent: SendResult = { ok: false, error: "unknown_type" };
-        if (attachment.type === "image") {
-          mediaSent = await sendWhatsAppImage(contact.phone, attachment.url, creds, attachment.caption);
-        } else if (attachment.type === "document") {
-          mediaSent = await sendWhatsAppDocument(contact.phone, attachment.url, creds, attachment.caption, attachment.caption);
-        } else if (attachment.type === "video") {
-          mediaSent = await sendWhatsAppVideo(contact.phone, attachment.url, creds, attachment.caption);
-        } else if (attachment.type === "audio") {
-          mediaSent = await sendWhatsAppAudio(contact.phone, attachment.url, creds);
-        }
+      for (const attachment of remainingMedia) {
+        await new Promise((r) => setTimeout(r, MEDIA_SEND_GAP_MS));
+        const mediaSent = await sendAttachment(contact.phone, attachment, creds);
         if (mediaSent.ok) {
           await db.from("messages").insert({
             agent_id: agentId,
             conversation_id: conversation.id,
             direction: "outbound",
             sender: "ai",
-            content: `[${attachment.type}] ${attachment.caption ?? attachment.url}`,
+            // URL first so the dashboard can render the photo (components/ui/media-attachments.tsx).
+            content: `[${attachment.type}] ${attachment.url}${attachment.caption ? `\n${attachment.caption}` : ""}`,
             intent: result.intent,
             wasender_id: mediaSent.id ?? null,
           });
         } else {
-          console.error(`[engine] media send failed (${attachment.type}): ${mediaSent.error}`);
+          console.error(`[engine] media send failed (${attachment.type} ${attachment.url}): ${mediaSent.error}`);
+          await logAudit(db, agentId, "wasender", "media_send_failed", conversation.id, {
+            type: attachment.type,
+            url: attachment.url,
+            error: mediaSent.error,
+          });
         }
       }
     }
@@ -514,6 +551,56 @@ async function deliverReply(
     }
   }
   return { sent: await sendWhatsAppText(phone, reply, creds), byVoice: false };
+}
+
+/** Pause before each attachment so photos arrive after the text, in order. */
+const MEDIA_SEND_GAP_MS = 1200;
+
+/** WhatsApp images: JPEG/PNG up to 5 MB (Wasender docs). */
+const MAX_WHATSAPP_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Check a photo WhatsApp will actually accept. "unsupported" = reachable but
+ * wrong format/too big (e.g. WebP catalog images); "unknown" = couldn't tell
+ * (HEAD not allowed, timeout) — then we just try.
+ */
+async function probeImage(url: string): Promise<"ok" | "unsupported" | "unknown"> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, { method: "HEAD", signal: controller.signal, redirect: "follow" });
+    if (!res.ok) return "unknown";
+    const type = res.headers.get("content-type")?.toLowerCase() ?? "";
+    const size = Number(res.headers.get("content-length"));
+    if (type && !/image\/(jpe?g|png)/.test(type)) return "unsupported";
+    if (Number.isFinite(size) && size > MAX_WHATSAPP_IMAGE_BYTES) return "unsupported";
+    return "ok";
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendAttachment(phone: string, attachment: AgentMediaAttachment, creds: WasenderCreds): Promise<SendResult> {
+  switch (attachment.type) {
+    case "image": {
+      // A photo WhatsApp refuses as an image still reaches the client as a file.
+      if ((await probeImage(attachment.url)) === "unsupported") {
+        const fileName = decodeURIComponent(attachment.url.split("?")[0].split("/").pop() || "photo");
+        return sendWhatsAppDocument(phone, attachment.url, creds, fileName, attachment.caption);
+      }
+      return sendWhatsAppImage(phone, attachment.url, creds, attachment.caption);
+    }
+    case "document":
+      return sendWhatsAppDocument(phone, attachment.url, creds, attachment.caption, attachment.caption);
+    case "video":
+      return sendWhatsAppVideo(phone, attachment.url, creds, attachment.caption);
+    case "audio":
+      return sendWhatsAppAudio(phone, attachment.url, creds);
+    default:
+      return { ok: false, error: "unknown_type" };
+  }
 }
 
 // ─────────────────────────── helpers ───────────────────────────

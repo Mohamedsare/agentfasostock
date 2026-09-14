@@ -32,10 +32,13 @@ import { LEAD_STATUS_META } from "@/lib/constants";
 import { toast } from "sonner";
 import type { AgentResult, AgentTone } from "@/lib/types";
 import { WhatsAppText } from "@/components/ui/whatsapp-text";
+import { MediaAttachments } from "@/components/ui/media-attachments";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** Photos/documents the agent would send with this reply. */
+  media?: AgentResult["media"];
 }
 
 const TONES: { value: AgentTone; label: string }[] = [
@@ -87,7 +90,7 @@ export function LabsSimulator({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: next,
+          messages: next.map(({ role, content }) => ({ role, content })),
           toneOverride: tone,
           systemPromptOverride: prompt.trim() || undefined,
           previousScore: result?.score ?? 0,
@@ -99,7 +102,7 @@ export function LabsSimulator({
       const data: AgentResult = await res.json();
       setResult(data);
       if (data.reply) {
-        setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+        setMessages((m) => [...m, { role: "assistant", content: data.reply, media: data.media }]);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Échec de la simulation.");
@@ -215,6 +218,7 @@ export function LabsSimulator({
                   )}
                 >
                   <WhatsAppText text={m.content} />
+                  {m.media?.length ? <MediaAttachments media={m.media} className="mt-2" /> : null}
                 </div>
                 {m.role === "user" && (
                   <span className="mt-1 grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-secondary-foreground">

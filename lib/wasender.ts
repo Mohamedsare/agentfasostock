@@ -92,50 +92,12 @@ export async function sendWhatsAppText(
     return { ok: false, error: "wasender_not_connected" };
   }
 
-  const url = `${creds.baseUrl.replace(/\/$/, "")}/send-message`;
   // Wasender requires E.164 (with leading "+"). normalizePhone yields digits.
-  const body = JSON.stringify({ to: toE164(to), text });
-
-  let lastError = "";
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${creds.apiKey}`,
-        },
-        body,
-      });
-
-      if (res.ok) {
-        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        // Wasender returns HTTP 200 even on logical failures (e.g. disconnected
-        // session) with `{ success: false, message }`. Treat that as a failure.
-        if (data && data.success === false) {
-          lastError = `Wasender: ${(data.message as string) ?? "échec d'envoi"}`;
-          break;
-        }
-        const id =
-          (data?.data as { msgId?: string; id?: string })?.msgId ??
-          (data?.data as { id?: string })?.id ??
-          (data as { id?: string })?.id;
-        return { ok: true, id: id ? String(id) : undefined };
-      }
-
-      lastError = `HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`;
-      // Don't retry on 4xx (incl. 429 rate-limit, where retry_after is ~minutes);
-      // only transient 5xx / network errors are worth retrying.
-      if (res.status < 500) break;
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : "network error";
-    }
-    if (attempt < MAX_RETRIES) await delay(400 * (attempt + 1));
-  }
-
-  console.error("[wasender] send failed:", lastError);
-  return { ok: false, error: lastError };
+  return postSendMessage({ to: toE164(to), text }, creds);
 }
+
+/** Longest 429 `retry_after` worth waiting for inline (message spacing); longer = give up. */
+const MAX_INLINE_RETRY_AFTER_S = 15;
 
 /** Shape of the JSON Wasender returns from message/upload/decrypt endpoints. */
 interface WasenderResponse {
@@ -146,31 +108,57 @@ interface WasenderResponse {
   data?: { msgId?: string | number; id?: string | number };
 }
 
-/** Low-level POST to the Wasender /send-message endpoint with an arbitrary body. */
+/**
+ * POST to the Wasender /send-message endpoint (text, image, document, video,
+ * audio). Retries network errors and 5xx, and waits out short 429 rate limits
+ * (`retry_after`) — sending a reply followed by product photos in a row is
+ * exactly what triggers Wasender's message spacing.
+ */
 async function postSendMessage(
   payload: Record<string, unknown>,
   creds: WasenderCreds,
 ): Promise<SendResult> {
   if (!creds.apiKey) return { ok: false, error: "wasender_not_connected" };
   const url = `${creds.baseUrl.replace(/\/$/, "")}/send-message`;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${creds.apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = (await res.json().catch(() => ({}))) as WasenderResponse;
-    if (!res.ok || data?.success === false) {
-      return { ok: false, error: `Wasender: ${data?.message ?? `HTTP ${res.status}`}` };
+  const body = JSON.stringify(payload);
+
+  let lastError = "";
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let waitMs = 400 * (attempt + 1);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${creds.apiKey}`,
+        },
+        body,
+      });
+      const data = (await res.json().catch(() => ({}))) as WasenderResponse & { retry_after?: number | string };
+      // Wasender returns HTTP 200 even on logical failures (e.g. disconnected
+      // session) with `{ success: false, message }`. Treat that as a failure.
+      if (res.ok && data?.success !== false) {
+        const id = data?.data?.msgId ?? data?.data?.id ?? data?.id;
+        return { ok: true, id: id ? String(id) : undefined };
+      }
+      lastError = `Wasender: ${data?.message ?? `HTTP ${res.status}`}`;
+
+      if (res.status === 429) {
+        const retryAfter = Number(data?.retry_after ?? res.headers.get("retry-after"));
+        const seconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5;
+        if (seconds > MAX_INLINE_RETRY_AFTER_S) break;
+        waitMs = seconds * 1000 + 300;
+      } else if (res.status < 500) {
+        break; // other 4xx / logical failure: retrying won't help
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : "network error";
     }
-    const id = data?.data?.msgId ?? data?.data?.id ?? data?.id;
-    return { ok: true, id: id ? String(id) : undefined };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "network error" };
+    if (attempt < MAX_RETRIES) await delay(waitMs);
   }
+
+  console.error("[wasender] send failed:", lastError);
+  return { ok: false, error: lastError };
 }
 
 /** Send a WhatsApp voice note / audio message from a public URL. */

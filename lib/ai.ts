@@ -7,6 +7,7 @@ import { agentResultSchema } from "@/lib/validations";
 import { formatWhatsAppReply } from "@/lib/whatsapp-format";
 import {
   FULL_DUMP_MAX_PRODUCTS,
+  normalizeText,
   renderProductDetail,
   searchProducts,
   summarizeCategories,
@@ -137,7 +138,7 @@ export async function generateAgentResult(options: GenerateOptions): Promise<Age
     // Extract any markdown images the model accidentally put in `reply`
     // (e.g. "![alt](https://...)" or bare URLs) and move them to `media`.
     // Then drop any media URL the model invented — only real catalog/document files go out.
-    const grounded = keepGroundedMedia(extractMarkdownImages(normalised), options);
+    const grounded = ensureRequestedPhotos(keepGroundedMedia(extractMarkdownImages(normalised), options), options);
     // Guarantee WhatsApp syntax (*gras*, one list item per line) whatever the model produced.
     const sanitized = { ...grounded, reply: formatWhatsAppReply(grounded.reply) };
 
@@ -220,18 +221,78 @@ function runSearchTool(products: Product[], rawArgs: string): string {
   return `${results.length} résultat(s) pour « ${query} » :\n${results.map(renderProductDetail).join("\n")}`;
 }
 
-/** Keep only media whose URL really exists in the catalog or the knowledge files. */
+function fileNameOf(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "").toLowerCase();
+  } catch {
+    return (url.split("?")[0].split("/").pop() ?? "").toLowerCase();
+  }
+}
+
+/**
+ * Keep only media whose URL really exists in the catalog or the knowledge
+ * files. A URL the model re-typed slightly (encoding, dropped query string) is
+ * recovered through its unique file name instead of being lost. Product photos
+ * get the product name as caption when the model gave none.
+ */
 function keepGroundedMedia(data: AgentResult, options: GenerateOptions): AgentResult {
   if (!data.media?.length) return data;
-  const allowed = new Set([
-    ...(options.products ?? []).flatMap((p) => p.images),
-    ...(options.files ?? []).map((f) => f.public_url),
-  ]);
-  const media = data.media.filter((m) => allowed.has(m.url));
-  if (media.length !== data.media.length) {
-    console.warn(`[ai] dropped ${data.media.length - media.length} media URL(s) not found in catalog/documents`);
+  const productByImage = new Map<string, Product>();
+  for (const p of options.products ?? []) for (const img of p.images) productByImage.set(img, p);
+  const allowed = [...productByImage.keys(), ...(options.files ?? []).map((f) => f.public_url)];
+  const allowedSet = new Set(allowed);
+
+  // File name → URL, only for unambiguous names ("image.jpg" shared by several files is not a match).
+  const byFileName = new Map<string, string | null>();
+  for (const url of allowed) {
+    const name = fileNameOf(url);
+    if (name) byFileName.set(name, byFileName.has(name) && byFileName.get(name) !== url ? null : url);
+  }
+
+  const media: AgentMediaAttachment[] = [];
+  for (const m of data.media) {
+    const url = allowedSet.has(m.url) ? m.url : byFileName.get(fileNameOf(m.url)) ?? null;
+    if (!url) {
+      console.warn(`[ai] dropped media URL not found in catalog/documents: ${m.url}`);
+      continue;
+    }
+    if (media.some((x) => x.url === url)) continue;
+    media.push({ ...m, url, caption: m.caption ?? productByImage.get(url)?.name });
   }
   return { ...data, media: media.length ? media : undefined };
+}
+
+/** The client explicitly asks to see something. */
+const PHOTO_REQUEST = /\b(photos?|images?|pics?|visuels?|montre[rz]?|ressemble)\b/i;
+
+/**
+ * Safety net: the client asked for a photo, the reply names catalog products
+ * that have photos, but the model forgot to attach them → attach them.
+ */
+function ensureRequestedPhotos(data: AgentResult, options: GenerateOptions): AgentResult {
+  if (data.media?.length || !data.reply) return data;
+  const lastUser = [...options.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  if (!PHOTO_REQUEST.test(lastUser)) return data;
+
+  const reply = normalizeText(data.reply);
+  const named = (options.products ?? [])
+    .filter((p) => p.is_active && p.images.length > 0 && reply.includes(normalizeText(p.name)))
+    // Longest names first, so "BOUGIE SIRIUS NANO" doesn't also pull in "BOUGIE SIRIUS".
+    .sort((a, b) => b.name.length - a.name.length);
+  const chosen: Product[] = [];
+  for (const p of named) {
+    const n = normalizeText(p.name);
+    if (chosen.some((c) => normalizeText(c.name).includes(n))) continue;
+    chosen.push(p);
+    if (chosen.length === 3) break;
+  }
+  if (chosen.length === 0) return data;
+
+  console.info(`[ai] photo requested but none attached — adding ${chosen.length} catalog photo(s)`);
+  return {
+    ...data,
+    media: chosen.map((p) => ({ type: "image" as const, url: p.images[0], caption: p.name })),
+  };
 }
 
 /**
