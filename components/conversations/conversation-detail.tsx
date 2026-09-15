@@ -75,7 +75,8 @@ export function ConversationDetail({
   const [pending, startTransition] = React.useTransition();
   const [draft, setDraft] = React.useState("");
   const [sending, setSending] = React.useState(false);
-  const [attachment, setAttachment] = React.useState<PendingAttachment | null>(null);
+  const [attachments, setAttachments] = React.useState<PendingAttachment[]>([]);
+  const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
   const [dragging, setDragging] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [noteDraft, setNoteDraft] = React.useState("");
@@ -100,60 +101,106 @@ export function ConversationDetail({
     });
   }
 
-  function attach(file: File | undefined) {
-    if (!file) return;
-    const type = mediaTypeOf(file);
-    if (file.size > MAX_MEDIA_BYTES[type]) {
-      toast.error(`Fichier trop lourd (max ${MAX_MEDIA_BYTES[type] / 1024 / 1024} Mo pour ce type).`);
+  function attach(files: File[]) {
+    const room = MAX_ATTACHMENTS - attachments.length;
+    if (files.length === 0) return;
+    if (room <= 0) {
+      toast.error(`Maximum ${MAX_ATTACHMENTS} fichiers par envoi.`);
       return;
     }
-    setAttachment((prev) => {
-      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
-      return { file, type, previewUrl: type === "image" ? URL.createObjectURL(file) : null };
-    });
-  }
-
-  function clearAttachment() {
-    setAttachment((prev) => {
-      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
-      return null;
-    });
+    if (files.length > room) toast.error(`Maximum ${MAX_ATTACHMENTS} fichiers : seuls les ${room} premiers sont ajoutés.`);
+    const added: PendingAttachment[] = [];
+    for (const file of files.slice(0, room)) {
+      const type = mediaTypeOf(file);
+      if (file.size > MAX_MEDIA_BYTES[type]) {
+        toast.error(`${file.name} est trop lourd (max ${MAX_MEDIA_BYTES[type] / MB} Mo pour ce type).`);
+        continue;
+      }
+      added.push({
+        id: crypto.randomUUID(),
+        file,
+        type,
+        previewUrl: type === "image" ? URL.createObjectURL(file) : null,
+      });
+    }
+    setAttachments((prev) => [...prev, ...added]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function sendAttachment(a: PendingAttachment, caption: string) {
+  function removeAttachment(id: string) {
+    setAttachments((prev) => {
+      const gone = prev.find((a) => a.id === id);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }
+
+  function clearAttachments() {
+    setAttachments((prev) => {
+      prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+      return [];
+    });
+  }
+
+  async function uploadAttachment(a: PendingAttachment): Promise<{ url?: string; error?: string }> {
     const upload = await createChatMediaUpload(c.id, a.file.name);
     if (!upload.ok || !upload.path || !upload.token || !upload.publicUrl) {
-      return { ok: false, error: upload.error ?? "Upload échoué." };
+      return { error: upload.error ?? "Upload échoué." };
     }
     const { error } = await createBrowserSupabase()
       .storage.from("chat-media")
       .uploadToSignedUrl(upload.path, upload.token, a.file, { contentType: a.file.type || undefined });
-    if (error) return { ok: false, error: `Upload échoué : ${error.message}` };
-    const media: ManualMedia = {
-      type: a.type,
-      url: upload.publicUrl,
-      fileName: a.file.name,
-      caption: caption || undefined,
-    };
-    return sendManualMedia(c.id, contact.phone, media);
+    return error ? { error: `Upload échoué : ${error.message}` } : { url: upload.publicUrl };
+  }
+
+  /** Upload everything in parallel, then send in order (Wasender paces each number). */
+  async function sendAttachments(items: PendingAttachment[], caption: string) {
+    const uploads = await Promise.all(items.map(uploadAttachment));
+    const errors: string[] = [];
+    let sent = 0;
+    setProgress({ done: 0, total: items.length });
+    for (const [i, a] of items.entries()) {
+      const { url, error } = uploads[i];
+      const res = url
+        ? await sendManualMedia(c.id, contact.phone, {
+            type: a.type,
+            url,
+            fileName: a.file.name,
+            // The typed text goes with the first file, like WhatsApp.
+            caption: i === 0 && caption ? caption : undefined,
+          } satisfies ManualMedia)
+        : { ok: false, error };
+      if (res.ok) sent++;
+      else errors.push(`${a.file.name} : ${res.error ?? "échec"}`);
+      setProgress({ done: i + 1, total: items.length });
+    }
+    setProgress(null);
+    return { sent, errors };
   }
 
   async function onSend() {
     const text = draft.trim();
-    if (!text && !attachment) return;
+    const items = attachments;
+    if (!text && items.length === 0) return;
     setSending(true);
-    const res = attachment
-      ? await sendAttachment(attachment, text)
-      : await sendManualMessage(c.id, contact.phone, text);
-    setSending(false);
-    if (res.ok) {
-      setDraft("");
-      clearAttachment();
-      toast.success(attachment ? "Média envoyé." : "Message envoyé.");
-      router.refresh();
-    } else {
-      toast.error(res.error ?? "Envoi échoué.");
+    try {
+      if (items.length > 0) {
+        const { sent, errors } = await sendAttachments(items, text);
+        setDraft("");
+        clearAttachments();
+        if (sent > 0) toast.success(sent > 1 ? `${sent} médias envoyés.` : "Média envoyé.");
+        errors.forEach((e) => toast.error(e));
+      } else {
+        const res = await sendManualMessage(c.id, contact.phone, text);
+        if (res.ok) {
+          setDraft("");
+          toast.success("Message envoyé.");
+        } else {
+          toast.error(res.error ?? "Envoi échoué.");
+        }
+      }
+    } finally {
+      setSending(false);
       router.refresh();
     }
   }
@@ -235,7 +282,7 @@ export function ConversationDetail({
               if (!e.dataTransfer.files.length) return;
               e.preventDefault();
               setDragging(false);
-              attach(e.dataTransfer.files[0]);
+              attach(Array.from(e.dataTransfer.files));
             }}
             className={cn("border-t border-border p-3 transition-colors", dragging && "bg-primary/5")}
           >
@@ -244,15 +291,34 @@ export function ConversationDetail({
                 ✋ Envoyer un message manuel met l'IA en pause sur cette conversation.
               </p>
             )}
-            {attachment && (
-              <AttachmentPreview attachment={attachment} disabled={sending} onRemove={clearAttachment} />
+            {attachments.length > 0 && (
+              <div className="mb-2 space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {progress
+                      ? `Envoi ${Math.min(progress.done + 1, progress.total)}/${progress.total}…`
+                      : `${attachments.length} fichier${attachments.length > 1 ? "s" : ""} · la légende accompagne le premier`}
+                  </span>
+                  {!sending && (
+                    <button type="button" onClick={clearAttachments} className="hover:text-foreground hover:underline">
+                      Tout retirer
+                    </button>
+                  )}
+                </div>
+                <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
+                  {attachments.map((a) => (
+                    <AttachmentPreview key={a.id} attachment={a} disabled={sending} onRemove={() => removeAttachment(a.id)} />
+                  ))}
+                </div>
+              </div>
             )}
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept={ACCEPTED_FILES}
               className="hidden"
-              onChange={(e) => attach(e.target.files?.[0])}
+              onChange={(e) => attach(Array.from(e.target.files ?? []))}
             />
             <div className="flex items-end gap-2">
               <Button
@@ -270,10 +336,10 @@ export function ConversationDetail({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onPaste={(e) => {
-                  const file = Array.from(e.clipboardData.files)[0];
-                  if (file) {
+                  const files = Array.from(e.clipboardData.files);
+                  if (files.length > 0) {
                     e.preventDefault();
-                    attach(file);
+                    attach(files);
                   }
                 }}
                 onKeyDown={(e) => {
@@ -282,11 +348,11 @@ export function ConversationDetail({
                     onSend();
                   }
                 }}
-                placeholder={attachment ? "Ajouter une légende…" : "Votre message…"}
+                placeholder={attachments.length > 0 ? "Ajouter une légende…" : "Votre message…"}
                 rows={1}
                 className="max-h-32 min-h-10 flex-1 resize-none py-2"
               />
-              <Button type="submit" size="icon" disabled={sending || (!draft.trim() && !attachment)} aria-label="Envoyer">
+              <Button type="submit" size="icon" disabled={sending || (!draft.trim() && attachments.length === 0)} aria-label="Envoyer">
                 {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
               </Button>
             </div>
@@ -487,12 +553,14 @@ function MessageBubble({ message }: { message: Message }) {
 }
 
 interface PendingAttachment {
+  id: string;
   file: File;
   type: ManualMedia["type"];
   previewUrl: string | null;
 }
 
 const MB = 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
 /** WhatsApp limits: 5 Mo images, 16 Mo video/audio; documents capped by Storage. */
 const MAX_MEDIA_BYTES: Record<ManualMedia["type"], number> = {
   image: 5 * MB,
@@ -524,20 +592,20 @@ function AttachmentPreview({
   const Icon = type === "video" ? Film : type === "audio" ? Music : FileText;
   const size = file.size < MB ? `${Math.max(1, Math.round(file.size / 1024))} Ko` : `${(file.size / MB).toFixed(1)} Mo`;
   return (
-    <div className="mb-2 flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-2">
+    <div className="flex w-full items-center gap-2 rounded-lg border border-border bg-muted/40 p-1.5 sm:w-[calc(50%-0.25rem)]">
       {previewUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={previewUrl} alt="" className="size-14 shrink-0 rounded-md object-cover" />
+        <img src={previewUrl} alt="" className="size-11 shrink-0 rounded-md object-cover" />
       ) : (
-        <div className="flex size-14 shrink-0 items-center justify-center rounded-md bg-muted">
-          <Icon className="size-6 text-muted-foreground" />
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Icon className="size-5 text-muted-foreground" />
         </div>
       )}
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-foreground">{file.name}</p>
         <p className="text-xs text-muted-foreground">{size}</p>
       </div>
-      <Button type="button" size="icon" variant="ghost" onClick={onRemove} disabled={disabled} aria-label="Retirer le média">
+      <Button type="button" size="icon" variant="ghost" className="size-8" onClick={onRemove} disabled={disabled} aria-label={`Retirer ${file.name}`}>
         <X className="size-4" />
       </Button>
     </div>
