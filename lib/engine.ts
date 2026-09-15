@@ -342,15 +342,17 @@ export async function handleInboundMessage(
       }
     }
 
+    let voiceUrl: string | null = null;
     if (!captionSent) {
-      const delivery = await deliverReply(ctx, contact.phone, result.reply, resolved.replyAsVoice);
+      const delivery = await deliverReply(ctx, contact.phone, result.reply, resolved.replyAsVoice, conversation.id);
       sent = delivery.sent;
       repliedByVoice = delivery.byVoice;
+      voiceUrl = delivery.voiceUrl;
     }
     if (!sent.ok) {
       console.error(`[engine] WhatsApp send failed for ${contact.phone}: ${sent.error}`);
     }
-    await db.from("messages").insert({
+    const replyRow = {
       agent_id: agentId,
       conversation_id: conversation.id,
       direction: "outbound",
@@ -358,7 +360,14 @@ export async function handleInboundMessage(
       content: repliedByVoice ? `🎤 ${result.reply}` : result.reply,
       intent: result.intent,
       wasender_id: sent.id ?? null,
-    });
+    };
+    if (voiceUrl) {
+      // The voice note stays playable in the dashboard; before migration 0018, text only.
+      const { error } = await db.from("messages").insert({ ...replyRow, media_url: voiceUrl, media_type: "audio" });
+      if (error) await db.from("messages").insert(replyRow);
+    } else {
+      await db.from("messages").insert(replyRow);
+    }
     if (captionSent && solo) {
       // Same WhatsApp message as the text above; logged separately so the dashboard shows the photo.
       await db.from("messages").insert({
@@ -668,23 +677,36 @@ async function persistInboundMedia(
     const contentType = (inbound.media?.mimetype ?? res.headers.get("content-type") ?? "application/octet-stream")
       .split(";")[0]
       .trim();
-    const original = inbound.media?.fileName?.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
-    const name = original || `${inbound.kind}.${EXTENSIONS[contentType] ?? "bin"}`;
-    const path = `${conversationId}/in_${Date.now()}_${name}`;
-
-    const bucket = createAdminClient().storage.from(CHAT_MEDIA_BUCKET);
-    let { error } = await bucket.upload(path, bytes, { contentType, upsert: false });
-    if (error) {
-      // Missing bucket on a fresh project: create it and retry once.
-      await createAdminClient().storage.createBucket(CHAT_MEDIA_BUCKET, { public: true });
-      ({ error } = await bucket.upload(path, bytes, { contentType, upsert: false }));
-    }
-    if (error) throw new Error(`upload: ${error.message}`);
-    return bucket.getPublicUrl(path).data.publicUrl;
+    const name = inbound.media?.fileName || `${inbound.kind}.${EXTENSIONS[contentType] ?? "bin"}`;
+    return await storeChatMedia(bytes, contentType, conversationId, `in_${name}`);
   } catch (err) {
     console.error(`[engine] inbound media not stored: ${err instanceof Error ? err.message : err}`);
     return null;
   }
+}
+
+/** Upload bytes to the chat-media bucket; returns the public URL, or null on failure. */
+async function storeChatMedia(
+  bytes: Uint8Array,
+  contentType: string,
+  conversationId: string,
+  fileName: string,
+): Promise<string | null> {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
+  const path = `${conversationId}/${Date.now()}_${safeName}`;
+  const admin = createAdminClient();
+  const bucket = admin.storage.from(CHAT_MEDIA_BUCKET);
+  let { error } = await bucket.upload(path, bytes, { contentType, upsert: false });
+  if (error) {
+    // Missing bucket on a fresh project: create it and retry once.
+    await admin.storage.createBucket(CHAT_MEDIA_BUCKET, { public: true });
+    ({ error } = await bucket.upload(path, bytes, { contentType, upsert: false }));
+  }
+  if (error) {
+    console.error(`[engine] media not stored: ${error.message}`);
+    return null;
+  }
+  return bucket.getPublicUrl(path).data.publicUrl;
 }
 
 /** Decrypt an inbound media message to a temporary public URL (or null). */
@@ -708,7 +730,8 @@ async function deliverReply(
   phone: string,
   reply: string,
   asVoice: boolean,
-): Promise<{ sent: SendResult; byVoice: boolean }> {
+  conversationId: string,
+): Promise<{ sent: SendResult; byVoice: boolean; voiceUrl: string | null }> {
   const creds = credsOf(ctx);
   if (asVoice) {
     // Formatting marks (*gras*, "• ") would be read aloud.
@@ -716,15 +739,19 @@ async function deliverReply(
     if (speech) {
       const uploaded = await uploadMediaToWasender(speech.bytes, speech.mimetype, creds);
       if (uploaded.ok && uploaded.url) {
-        const sent = await sendWhatsAppAudio(phone, uploaded.url, creds);
-        if (sent.ok) return { sent, byVoice: true };
+        // Keep a copy in parallel: the Wasender URL expires after ~24h.
+        const [sent, voiceUrl] = await Promise.all([
+          sendWhatsAppAudio(phone, uploaded.url, creds),
+          storeChatMedia(speech.bytes, speech.mimetype, conversationId, "reponse-vocale.ogg"),
+        ]);
+        if (sent.ok) return { sent, byVoice: true, voiceUrl };
         console.error(`[engine] voice send failed, falling back to text: ${sent.error}`);
       } else {
         console.error(`[engine] voice upload failed, falling back to text: ${uploaded.error}`);
       }
     }
   }
-  return { sent: await sendWhatsAppText(phone, reply, creds), byVoice: false };
+  return { sent: await sendWhatsAppText(phone, reply, creds), byVoice: false, voiceUrl: null };
 }
 
 // ─────────────────────────── helpers ───────────────────────────
