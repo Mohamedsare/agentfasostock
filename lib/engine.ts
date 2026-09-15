@@ -5,6 +5,8 @@ import {
   sendWhatsAppText,
   sendWhatsAppAudio,
   sendWhatsAppImage,
+  sendWhatsAppVideo,
+  sendWhatsAppDocument,
   sendLeadWhatsApp,
   uploadMediaToWasender,
   decryptMediaFile,
@@ -303,7 +305,7 @@ export async function handleInboundMessage(
     });
   }
 
-  await applyAgentResult(db, { conversation, contact, result, history, ctx });
+  const alertSent = await applyAgentResult(db, { conversation, contact, result, history, ctx });
 
   // On a silent handoff (qualified/hot lead, or explicit human request) we
   // deliberately stay silent with the prospect: never tell them we're passing
@@ -407,6 +409,12 @@ export async function handleInboundMessage(
     }
   }
 
+  // The admin alert went out: follow it with the client's photos / voice notes,
+  // only now so the client's reply isn't held back by Wasender's send pacing.
+  if (alertSent) {
+    await forwardClientMediaToAdmin(db, { ctx, contact, conversationId: conversation.id });
+  }
+
   // Schedule the next relance (24h) when the conversation is still in play.
   // Terminal/handoff statuses get no auto follow-up: a human takes over, or the
   // lead is converted/lost. Only schedule when we actually replied.
@@ -506,14 +514,16 @@ async function applyAgentResult(
   const trigger = emailTriggerFor(result.status);
   const becameNotable = result.status !== conversation.status && shouldNotifyAdmin(result.status);
   if (trigger && (result.status === "humain_requis" || becameNotable)) {
-    await notifyAdmin(db, { trigger, contact, conversation: { ...conversation, ...result }, ctx });
+    return notifyAdmin(db, { trigger, contact, conversation: { ...conversation, ...result }, ctx });
   }
+  return false;
 }
 
+/** Returns true when the WhatsApp alert was delivered. */
 async function notifyAdmin(
   db: Db,
   args: { trigger: EmailTrigger; contact: Contact; conversation: Conversation & AgentResult; ctx: Ctx },
-) {
+): Promise<boolean> {
   const { trigger, contact, conversation, ctx } = args;
   // The agent's owner is alerted over WhatsApp when a lead becomes notable.
   const sent = await sendLeadWhatsApp({
@@ -546,6 +556,69 @@ async function notifyAdmin(
     error: sent.error ?? null,
     sent_at: sent.ok ? new Date().toISOString() : null,
   });
+  return sent.ok;
+}
+
+/** Client files forwarded after an alert: the most recent ones, from the last 24h. */
+const ALERT_MEDIA_LIMIT = 3;
+const ALERT_MEDIA_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Send the client's recent photos / voice notes / videos / documents to the
+ * agent's owner right after the text alert, so Mohamed sees or hears what the
+ * client sent without opening the dashboard. Best effort; needs migration 0018.
+ */
+async function forwardClientMediaToAdmin(
+  db: Db,
+  args: { ctx: Ctx; contact: Contact; conversationId: string },
+) {
+  const { ctx, contact, conversationId } = args;
+  if (!ctx.adminWhatsapp) return;
+  const { data, error } = await db
+    .from("messages")
+    .select("media_url, media_type")
+    .eq("conversation_id", conversationId)
+    .eq("sender", "contact")
+    .not("media_url", "is", null)
+    .gte("created_at", new Date(Date.now() - ALERT_MEDIA_WINDOW_MS).toISOString())
+    .order("created_at", { ascending: false })
+    .limit(ALERT_MEDIA_LIMIT);
+  if (error || !data?.length) return; // before migration 0018 there is nothing to forward
+
+  const creds = credsOf(ctx);
+  const who = contact.name?.trim() || contact.phone;
+  const rows = (data as { media_url: string; media_type: NonNullable<Message["media_type"]> }[]).reverse();
+  for (const { media_url: url, media_type: type } of rows) {
+    let sent: SendResult;
+    switch (type) {
+      case "image":
+        sent = await sendWhatsAppImage(ctx.adminWhatsapp, url, creds, `📷 Photo envoyée par ${who}`);
+        break;
+      case "video":
+        sent = await sendWhatsAppVideo(ctx.adminWhatsapp, url, creds, `🎬 Vidéo envoyée par ${who}`);
+        break;
+      case "audio":
+        // Voice notes can't carry a caption: it follows the alert text naming the client.
+        sent = await sendWhatsAppAudio(ctx.adminWhatsapp, url, creds);
+        break;
+      default:
+        sent = await sendWhatsAppDocument(
+          ctx.adminWhatsapp,
+          url,
+          creds,
+          url.split("/").pop(),
+          `📎 Document envoyé par ${who}`,
+        );
+    }
+    if (!sent.ok) {
+      console.error(`[engine] alert media not forwarded (${type}): ${sent.error}`);
+      await logAudit(db, ctx.agent.id, "wasender", "alert_media_failed", conversationId, {
+        type,
+        url,
+        error: sent.error,
+      });
+    }
+  }
 }
 
 // ─────────────────────────── media ───────────────────────────
