@@ -539,6 +539,12 @@ function MessageBubble({ message }: { message: Message }) {
                 : "rounded-br-sm bg-primary text-primary-foreground",
           )}
         >
+          {message.media_url && message.media_type && (
+            <MediaAttachments
+              media={[{ type: message.media_type, url: message.media_url }]}
+              className="-mx-1.5 mb-1.5 mt-0.5"
+            />
+          )}
           {(() => {
             const media = parseMediaMessage(message.content);
             return media ? <MediaAttachments media={[media]} /> : <WhatsAppText text={message.content} />;

@@ -24,9 +24,19 @@ export function MediaAttachments({ media, className }: { media: AgentMediaAttach
         m.type === "image" ? (
           <a key={i} href={m.url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={m.url} alt={m.caption ?? "Photo produit"} loading="lazy" className="max-h-56 w-full object-cover" />
+            <img src={m.url} alt={m.caption ?? "Image"} loading="lazy" className="max-h-72 w-full object-cover" />
             {m.caption && <span className="block px-2 py-1 text-xs opacity-80">{m.caption}</span>}
           </a>
+        ) : m.type === "video" ? (
+          <div key={i} className="overflow-hidden rounded-lg bg-black">
+            <video src={m.url} controls preload="metadata" className="max-h-72 w-full" />
+            {m.caption && <span className="block bg-muted px-2 py-1 text-xs opacity-80">{m.caption}</span>}
+          </div>
+        ) : m.type === "audio" ? (
+          <div key={i} className="space-y-1">
+            <audio src={m.url} controls preload="metadata" className="h-10 w-64 max-w-full" />
+            {m.caption && <span className="block text-xs opacity-80">{m.caption}</span>}
+          </div>
         ) : (
           <a
             key={i}

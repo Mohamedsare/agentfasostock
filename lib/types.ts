@@ -115,6 +115,9 @@ export interface Message {
   direction: MessageDirection;
   sender: MessageSender;
   content: string;
+  /** Stored copy of a received file (migration 0018); `content` holds its text. */
+  media_url?: string | null;
+  media_type?: "image" | "video" | "audio" | "document" | null;
   intent: Intent | null;
   score_delta: number | null;
   wasender_id: string | null;

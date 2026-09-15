@@ -116,12 +116,20 @@ export async function handleInboundMessage(
 
   // Turn whatever the client sent (text, voice, image, document…) into text the
   // agent can reason about, and decide whether to answer with a voice note.
-  const resolved = await resolveInboundContent(inbound, ctx);
+  const resolved = await resolveInboundContent(inbound, ctx, conversation.id);
   if (!resolved.text) {
     await db.from("messages").delete().eq("id", inboundId);
     return { status: "ignored", reason: "unsupported_or_empty" };
   }
-  if (resolved.text !== inbound.text.trim()) {
+  if (resolved.media) {
+    // The dashboard shows the file itself; `content` keeps the text the agent reads.
+    const { error } = await db
+      .from("messages")
+      .update({ content: resolved.text, media_url: resolved.media.url, media_type: resolved.media.type })
+      .eq("id", inboundId);
+    // Before migration 0018 the media columns don't exist: keep the text at least.
+    if (error) await db.from("messages").update({ content: resolved.text }).eq("id", inboundId);
+  } else if (resolved.text !== inbound.text.trim()) {
     await db.from("messages").update({ content: resolved.text }).eq("id", inboundId);
   }
   await db
@@ -538,15 +546,26 @@ interface ResolvedInbound {
   text: string;
   /** Answer with a voice note (true only for understood voice notes). */
   replyAsVoice: boolean;
+  /** Permanent copy of the received file, shown in the dashboard. */
+  media?: { type: "image" | "video" | "audio" | "document"; url: string };
 }
 
 /**
  * Normalise any inbound message kind into agent-usable text. Voice notes are
  * transcribed, images are described; other media are acknowledged with a clear
- * marker so the agent and Mohamed both know what the client sent.
+ * marker so the agent and Mohamed both know what the client sent. Received
+ * files are also copied to Storage (the decrypted Wasender URL expires in ~1h).
  */
-async function resolveInboundContent(inbound: InboundMessage, ctx: Ctx): Promise<ResolvedInbound> {
+async function resolveInboundContent(
+  inbound: InboundMessage,
+  ctx: Ctx,
+  conversationId: string,
+): Promise<ResolvedInbound> {
   const caption = inbound.media?.caption?.trim() || inbound.text.trim();
+  const keep = async (url: string | null, type: NonNullable<ResolvedInbound["media"]>["type"]) => {
+    const stored = url ? await persistInboundMedia(url, inbound, conversationId) : null;
+    return stored ? { type, url: stored } : undefined;
+  };
 
   switch (inbound.kind) {
     case "text":
@@ -554,30 +573,36 @@ async function resolveInboundContent(inbound: InboundMessage, ctx: Ctx): Promise
 
     case "audio": {
       const url = await getDecryptedMediaUrl(inbound, ctx);
-      const transcript = url
-        ? await transcribeAudio(url, ctx.openaiKey, inbound.media?.mimetype)
-        : null;
-      if (transcript) return { text: `🎤 ${transcript}`, replyAsVoice: true };
+      const [transcript, media] = await Promise.all([
+        url ? transcribeAudio(url, ctx.openaiKey, inbound.media?.mimetype) : null,
+        keep(url, "audio"),
+      ]);
+      if (transcript) return { text: `🎤 ${transcript}`, replyAsVoice: true, media };
       // Couldn't understand the voice note — answer in text and ask to repeat.
       return {
         text: "🎤 (message vocal reçu — transcription indisponible)",
         replyAsVoice: false,
+        media,
       };
     }
 
     case "image": {
       const url = await getDecryptedMediaUrl(inbound, ctx);
-      const description = url ? await describeImage(url, ctx.openaiKey, caption) : null;
+      const [description, media] = await Promise.all([
+        url ? describeImage(url, ctx.openaiKey, caption) : null,
+        keep(url, "image"),
+      ]);
       const parts = ["🖼️ Image reçue."];
       if (caption) parts.push(`Légende : ${caption}.`);
       if (description) parts.push(`Contenu : ${description}`);
-      return { text: parts.join(" "), replyAsVoice: false };
+      return { text: parts.join(" "), replyAsVoice: false, media };
     }
 
     case "video":
       return {
         text: `🎬 Vidéo reçue.${caption ? ` Légende : ${caption}` : ""}`,
         replyAsVoice: false,
+        media: await keep(await getDecryptedMediaUrl(inbound, ctx), "video"),
       };
 
     case "document":
@@ -586,6 +611,7 @@ async function resolveInboundContent(inbound: InboundMessage, ctx: Ctx): Promise
           caption ? ` ${caption}` : ""
         }`,
         replyAsVoice: false,
+        media: await keep(await getDecryptedMediaUrl(inbound, ctx), "document"),
       };
 
     case "location":
@@ -595,10 +621,69 @@ async function resolveInboundContent(inbound: InboundMessage, ctx: Ctx): Promise
       return { text: "👤 Carte de contact partagée par le client.", replyAsVoice: false };
 
     case "sticker":
-      return { text: caption || "😄 (sticker reçu)", replyAsVoice: false };
+      return {
+        text: caption || "😄 (sticker reçu)",
+        replyAsVoice: false,
+        media: await keep(await getDecryptedMediaUrl(inbound, ctx), "image"),
+      };
 
     default:
       return { text: caption || "", replyAsVoice: false };
+  }
+}
+
+/** Same public bucket as manual attachments (lib/actions/conversations.ts). */
+const CHAT_MEDIA_BUCKET = "chat-media";
+/** Received files bigger than this are not copied (the text marker stays). */
+const MAX_INBOUND_MEDIA_BYTES = 25 * 1024 * 1024;
+
+const EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+  "audio/ogg": "ogg",
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "application/pdf": "pdf",
+};
+
+/**
+ * Copy a decrypted inbound file to Storage and return its permanent public URL.
+ * Best effort: any failure returns null and the message keeps its text only.
+ */
+async function persistInboundMedia(
+  sourceUrl: string,
+  inbound: InboundMessage,
+  conversationId: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(sourceUrl, { signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) throw new Error(`download HTTP ${res.status}`);
+    if (Number(res.headers.get("content-length")) > MAX_INBOUND_MEDIA_BYTES) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > MAX_INBOUND_MEDIA_BYTES) return null;
+
+    const contentType = (inbound.media?.mimetype ?? res.headers.get("content-type") ?? "application/octet-stream")
+      .split(";")[0]
+      .trim();
+    const original = inbound.media?.fileName?.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
+    const name = original || `${inbound.kind}.${EXTENSIONS[contentType] ?? "bin"}`;
+    const path = `${conversationId}/in_${Date.now()}_${name}`;
+
+    const bucket = createAdminClient().storage.from(CHAT_MEDIA_BUCKET);
+    let { error } = await bucket.upload(path, bytes, { contentType, upsert: false });
+    if (error) {
+      // Missing bucket on a fresh project: create it and retry once.
+      await createAdminClient().storage.createBucket(CHAT_MEDIA_BUCKET, { public: true });
+      ({ error } = await bucket.upload(path, bytes, { contentType, upsert: false }));
+    }
+    if (error) throw new Error(`upload: ${error.message}`);
+    return bucket.getPublicUrl(path).data.publicUrl;
+  } catch (err) {
+    console.error(`[engine] inbound media not stored: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
 }
 
