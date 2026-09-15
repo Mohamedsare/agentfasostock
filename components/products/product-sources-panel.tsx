@@ -12,6 +12,7 @@ import {
   saveProductSource, deleteProductSource, testProductSource, runProductSourceSync, listFasostockStores,
   type ProductSourceInput,
 } from "@/lib/actions/product-sources";
+import { DEFAULT_FASOSTOCK_MARKUP } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +25,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type {
-  ProductFieldMapping, ProductPaginationStyle, ProductSourceAuthType, ProductSourceView,
+  PriceMarkupTier, ProductFieldMapping, ProductPaginationStyle, ProductSourceAuthType, ProductSourceView,
 } from "@/lib/types";
 
 interface AgentOption { id: string; name: string }
@@ -71,6 +72,7 @@ function emptyDraft(agentId: string): Draft {
     perPage: 100,
     paginationStyle: "auto",
     incrementalParam: "",
+    priceMarkup: [],
     syncIntervalMinutes: 30,
     fieldMapping: {},
     isActive: true,
@@ -141,6 +143,7 @@ export function ProductSourcesPanel({
       perPage: s.per_page,
       paginationStyle: s.pagination_style ?? "auto",
       incrementalParam: s.incremental_param ?? "",
+      priceMarkup: s.price_markup ?? [],
       syncIntervalMinutes: s.sync_interval_minutes,
       fieldMapping: s.field_mapping ?? {},
       isActive: s.is_active,
@@ -181,6 +184,7 @@ export function ProductSourcesPanel({
       perPage: 500,
       paginationStyle: "offset",
       incrementalParam: "",
+      priceMarkup: d.priceMarkup.length ? d.priceMarkup : DEFAULT_FASOSTOCK_MARKUP,
     }));
   }
 
@@ -468,6 +472,8 @@ export function ProductSourcesPanel({
               )}
             </div>
 
+            <MarkupEditor tiers={draft.priceMarkup} onChange={(tiers) => set("priceMarkup", tiers)} />
+
             <div className="rounded-lg border border-border">
               <button
                 type="button"
@@ -558,7 +564,11 @@ export function ProductSourcesPanel({
                           )}
                           <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
                           <span className="text-muted-foreground">
-                            {p.price != null ? `${p.price} ${p.currency}` : "sans prix"}
+                            {p.price == null
+                              ? "sans prix"
+                              : p.cost_price != null && p.cost_price !== p.price
+                                ? `achat ${p.cost_price} → vente ${p.price} ${p.currency}`
+                                : `${p.price} ${p.currency}`}
                             {p.category ? ` · ${p.category}` : ""}
                             {p.in_stock === false ? " · rupture" : p.stock_quantity != null ? ` · stock ${p.stock_quantity}` : ""}
                           </span>
@@ -596,5 +606,115 @@ export function ProductSourcesPanel({
         </DialogContent>
       </Dialog>
     </Card>
+  );
+}
+
+const fcfa = (n: number) => `${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} FCFA`;
+
+/**
+ * Selling markup tiers: "up to X FCFA → + Y", the last row open-ended
+ * ("above X → + Y"). Empty = the agent sells at the API price.
+ */
+function MarkupEditor({ tiers, onChange }: { tiers: PriceMarkupTier[]; onChange: (tiers: PriceMarkupTier[]) => void }) {
+  const bounded = tiers.filter((t) => t.upTo != null);
+  const open = tiers.find((t) => t.upTo == null);
+  const rows: PriceMarkupTier[] = [...bounded, ...(open ? [open] : [])];
+
+  const update = (index: number, patch: Partial<PriceMarkupTier>) =>
+    onChange(rows.map((t, i) => (i === index ? { ...t, ...patch } : t)));
+  const addTier = () => {
+    const lastCeiling = bounded.length ? (bounded[bounded.length - 1].upTo as number) : 0;
+    const next = { upTo: lastCeiling + 5000, add: open?.add ?? 1000 };
+    onChange([...bounded, next, open ?? { upTo: null, add: 3000 }]);
+  };
+  const example = (price: number) => {
+    const tier = rows.find((t) => t.upTo == null || price <= t.upTo);
+    return tier ? `${fcfa(price)} → ${fcfa(price + tier.add)}` : `${fcfa(price)} → inchangé`;
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">Marge de vente</p>
+          <p className="text-xs text-muted-foreground">
+            L&apos;agent annonce le prix de l&apos;API + la marge de sa tranche (cartons : marge par pièce). Le prix d&apos;achat
+            n&apos;est jamais communiqué au client.
+          </p>
+        </div>
+        {rows.length === 0 && (
+          <Button type="button" size="sm" variant="outline" onClick={() => onChange(DEFAULT_FASOSTOCK_MARKUP)}>
+            <Plus className="size-4" /> Ajouter une marge
+          </Button>
+        )}
+      </div>
+
+      {rows.length > 0 && (
+        <>
+          <div className="space-y-2">
+            {rows.map((tier, i) => {
+              const previous = i > 0 ? rows[i - 1].upTo : null;
+              return (
+                <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
+                  {tier.upTo != null ? (
+                    <>
+                      <span className="w-20 text-muted-foreground">Jusqu&apos;à</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        className="h-8 w-28"
+                        value={tier.upTo}
+                        onChange={(e) => update(i, { upTo: Math.max(0, Number(e.target.value) || 0) })}
+                        aria-label={`Plafond de la tranche ${i + 1}`}
+                      />
+                      <span className="text-muted-foreground">FCFA</span>
+                    </>
+                  ) : (
+                    <span className="w-54 text-muted-foreground">
+                      {previous != null ? `Au-delà de ${fcfa(previous)}` : "Tous les prix"}
+                    </span>
+                  )}
+                  <span className="text-muted-foreground">→ +</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    className="h-8 w-24"
+                    value={tier.add}
+                    onChange={(e) => update(i, { add: Math.max(0, Number(e.target.value) || 0) })}
+                    aria-label={`Marge de la tranche ${i + 1}`}
+                  />
+                  <span className="text-muted-foreground">FCFA</span>
+                  {rows.length > 1 && tier.upTo != null && (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="size-8 text-destructive"
+                      onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                      aria-label={`Supprimer la tranche ${i + 1}`}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              Exemples : {example(2000)} · {example(4500)} · {example(17500)}
+            </p>
+            <div className="flex gap-1">
+              <Button type="button" size="sm" variant="ghost" onClick={addTier}>
+                <Plus className="size-4" /> Tranche
+              </Button>
+              <Button type="button" size="sm" variant="ghost" className="text-destructive" onClick={() => onChange([])}>
+                Retirer la marge
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

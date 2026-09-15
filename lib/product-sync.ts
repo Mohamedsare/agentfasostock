@@ -1,7 +1,8 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptSecret } from "@/lib/crypto";
-import type { ProductFieldMapping, ProductSource } from "@/lib/types";
+import { applyMarkup } from "@/lib/pricing";
+import type { PriceMarkupTier, ProductFieldMapping, ProductSource } from "@/lib/types";
 
 /**
  * Product API connector. Pulls an external catalog (e.g.
@@ -67,7 +68,10 @@ export interface NormalizedProduct {
   external_id: string;
   name: string;
   description: string | null;
+  /** Selling price (API price + markup) — the only price the agent sees. */
   price: number | null;
+  /** Price as returned by the supplier API. */
+  cost_price: number | null;
   currency: string;
   images: string[];
   sku: string | null;
@@ -255,12 +259,37 @@ export function extractItems(payload: Json, mapping: ProductFieldMapping): Json[
   return [];
 }
 
+/**
+ * Packaging prices at selling price: the markup applies PER PIECE (a carton of
+ * 10 at 15 000/piece → 18 000/piece → carton 180 000).
+ */
+function withMarkedUpPackagings(item: Json, markup: PriceMarkupTier[] | null | undefined): Json {
+  if (!markup?.length || !item || typeof item !== "object" || Array.isArray(item)) return item;
+  const packagings = (item as Record<string, Json>).packagings;
+  if (!Array.isArray(packagings)) return item;
+  return {
+    ...(item as Record<string, Json>),
+    packagings: packagings.map((p) => {
+      if (!p || typeof p !== "object") return p;
+      const o = p as Record<string, Json>;
+      const qty = asNumber(o.quantity ?? o.qty ?? null);
+      const total = asNumber(o.price ?? null);
+      const unitCost = asNumber(o.unit_price ?? null) ?? (qty && total != null ? total / qty : null);
+      if (unitCost == null) return o;
+      const unit = applyMarkup(unitCost, markup) as number;
+      return { ...o, unit_price: unit, ...(qty ? { price: Math.round(unit * qty) } : {}) };
+    }),
+  };
+}
+
 export function normalizeProduct(
   item: Json,
   mapping: ProductFieldMapping,
   baseUrl: string,
   /** Currency declared once on the response envelope (e.g. FasoStock `currency`). */
   defaultCurrency = "XOF",
+  /** Selling markup tiers of the source (lib/pricing.ts). */
+  markup: PriceMarkupTier[] | null = null,
 ): NormalizedProduct | null {
   const name = asText(pick(item, mapping.name, AUTO_FIELDS.name));
   const externalId = asText(pick(item, mapping.id, AUTO_FIELDS.id)) ?? name;
@@ -269,12 +298,13 @@ export function normalizeProduct(
   const stock = asNumber(pick(item, mapping.stock, AUTO_FIELDS.stock));
   const inStockRaw = asBool(pick(item, mapping.in_stock, AUTO_FIELDS.in_stock));
   const url = asText(pick(item, mapping.url, AUTO_FIELDS.url));
-  const price = asNumber(pick(item, mapping.price, AUTO_FIELDS.price));
-  const attributes = extraAttributes(item);
+  const costPrice = asNumber(pick(item, mapping.price, AUTO_FIELDS.price));
+  const price = applyMarkup(costPrice, markup);
+  const attributes = extraAttributes(withMarkedUpPackagings(item, markup));
   // `price` is today's price (promotion applied); keep the catalog price so the agent can mention the discount.
   const catalogPrice = asNumber(getPath(item, "sale_price") ?? null);
-  if (catalogPrice != null && price != null && catalogPrice > price) {
-    attributes["Prix catalogue (avant promotion)"] = catalogPrice;
+  if (catalogPrice != null && costPrice != null && catalogPrice > costPrice) {
+    attributes["Prix catalogue (avant promotion)"] = applyMarkup(catalogPrice, markup) as number;
   }
 
   return {
@@ -282,6 +312,7 @@ export function normalizeProduct(
     name: name.slice(0, 300),
     description: asText(pick(item, mapping.description, AUTO_FIELDS.description))?.slice(0, 4000) ?? null,
     price,
+    cost_price: costPrice,
     currency: (asText(pick(item, mapping.currency, AUTO_FIELDS.currency)) ?? defaultCurrency).toUpperCase().slice(0, 8),
     images: asImages(pick(item, mapping.images, AUTO_FIELDS.images), baseUrl),
     sku: asText(pick(item, mapping.sku, AUTO_FIELDS.sku)),
@@ -330,7 +361,7 @@ export function validateSourceUrl(raw: string): string | null {
 interface FetchCtx {
   source: Pick<
     ProductSource,
-    "base_url" | "auth_type" | "auth_key_name" | "default_query" | "per_page" | "pagination_style"
+    "base_url" | "auth_type" | "auth_key_name" | "default_query" | "per_page" | "pagination_style" | "price_markup"
   >;
   apiKey: string | null;
 }
@@ -437,7 +468,7 @@ async function walkPages(
     }
     const currency = envelopeCurrency(payload);
     const normalized = raw
-      .map((item) => normalizeProduct(item, mapping, ctx.source.base_url, currency))
+      .map((item) => normalizeProduct(item, mapping, ctx.source.base_url, currency, ctx.source.price_markup))
       .filter((p): p is NormalizedProduct => p !== null);
     // An API that ignores our pagination params returns the first page forever — stop instead of looping.
     const firstId = normalized[0]?.external_id ?? null;
@@ -543,7 +574,7 @@ export async function previewSource(
     total: declaredTotal ?? raw.length,
     samples: raw
       .slice(0, 5)
-      .map((i) => normalizeProduct(i, source.field_mapping, source.base_url, currency))
+      .map((i) => normalizeProduct(i, source.field_mapping, source.base_url, currency, source.price_markup))
       .filter((p): p is NormalizedProduct => p !== null),
     rawKeys: first && typeof first === "object" ? Object.keys(first as object) : [],
   };
@@ -565,7 +596,16 @@ async function upsertBatch(db: Db, source: ProductSource, items: NormalizedProdu
     });
     // Deduplicate within the batch — Postgres rejects an upsert touching a row twice.
     const unique = [...new Map(rows.map((r) => [r.external_id, r])).values()];
-    const { error } = await db.from("products").upsert(unique, { onConflict: "source_id,external_id" });
+    let { error } = await db.from("products").upsert(unique, { onConflict: "source_id,external_id" });
+    if (error && /cost_price/.test(error.message)) {
+      // Migration 0016 not applied yet: keep syncing without the supplier price column.
+      const withoutCost = unique.map((r) => {
+        const copy: Record<string, unknown> = { ...r };
+        delete copy.cost_price;
+        return copy;
+      });
+      ({ error } = await db.from("products").upsert(withoutCost, { onConflict: "source_id,external_id" }));
+    }
     if (error) throw new Error(`Écriture Supabase : ${error.message}`);
   }
 }

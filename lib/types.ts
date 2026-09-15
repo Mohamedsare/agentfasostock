@@ -185,6 +185,8 @@ export interface Product {
   /** Extra details from the API (compatibility, dimensions…) kept as flat key/values. */
   attributes?: Record<string, string | number | boolean>;
   synced_at?: string | null;
+  /** Supplier price before the selling markup (API products) — dashboard only, never shown to the agent. */
+  cost_price?: number | null;
 }
 
 export type LearningKind =
@@ -216,6 +218,12 @@ export interface AgentLearning {
 }
 
 export type ProductSourceAuthType = "none" | "bearer" | "header" | "query";
+
+/** Selling markup: prices up to `upTo` (null = no ceiling) get `add` on top. */
+export interface PriceMarkupTier {
+  upTo: number | null;
+  add: number;
+}
 
 /** auto = detected from the first response (next_offset/offset → offset, else page). */
 export type ProductPaginationStyle = "auto" | "page" | "offset";
@@ -251,6 +259,8 @@ export interface ProductSource {
   pagination_style: ProductPaginationStyle;
   /** "Changed since" query param (e.g. updated_since). Null = always full sync. */
   incremental_param: string | null;
+  /** Selling markup tiers applied to synced prices (lib/pricing.ts). Null = sell at the API price. */
+  price_markup: PriceMarkupTier[] | null;
   field_mapping: ProductFieldMapping;
   sync_interval_minutes: number;
   is_active: boolean;

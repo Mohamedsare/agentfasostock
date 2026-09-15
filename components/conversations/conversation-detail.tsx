@@ -22,7 +22,13 @@ import {
   LifeBuoy,
   UserX,
   UserCheck,
+  Paperclip,
+  X,
+  FileText,
+  Film,
+  Music,
 } from "lucide-react";
+import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,7 +47,10 @@ import { toast } from "sonner";
 import { cn, contactLabel, formatDateTime, getInitials, timeAgo } from "@/lib/utils";
 import {
   addNote,
+  createChatMediaUpload,
   excludeContact,
+  sendManualMedia,
+  type ManualMedia,
   reactivateAi,
   sendManualMessage,
   takeOverConversation,
@@ -66,6 +75,9 @@ export function ConversationDetail({
   const [pending, startTransition] = React.useTransition();
   const [draft, setDraft] = React.useState("");
   const [sending, setSending] = React.useState(false);
+  const [attachment, setAttachment] = React.useState<PendingAttachment | null>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [noteDraft, setNoteDraft] = React.useState("");
   const threadRef = React.useRef<HTMLDivElement>(null);
   const c = conversation;
@@ -88,18 +100,61 @@ export function ConversationDetail({
     });
   }
 
+  function attach(file: File | undefined) {
+    if (!file) return;
+    const type = mediaTypeOf(file);
+    if (file.size > MAX_MEDIA_BYTES[type]) {
+      toast.error(`Fichier trop lourd (max ${MAX_MEDIA_BYTES[type] / 1024 / 1024} Mo pour ce type).`);
+      return;
+    }
+    setAttachment((prev) => {
+      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
+      return { file, type, previewUrl: type === "image" ? URL.createObjectURL(file) : null };
+    });
+  }
+
+  function clearAttachment() {
+    setAttachment((prev) => {
+      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
+      return null;
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function sendAttachment(a: PendingAttachment, caption: string) {
+    const upload = await createChatMediaUpload(c.id, a.file.name);
+    if (!upload.ok || !upload.path || !upload.token || !upload.publicUrl) {
+      return { ok: false, error: upload.error ?? "Upload échoué." };
+    }
+    const { error } = await createBrowserSupabase()
+      .storage.from("chat-media")
+      .uploadToSignedUrl(upload.path, upload.token, a.file, { contentType: a.file.type || undefined });
+    if (error) return { ok: false, error: `Upload échoué : ${error.message}` };
+    const media: ManualMedia = {
+      type: a.type,
+      url: upload.publicUrl,
+      fileName: a.file.name,
+      caption: caption || undefined,
+    };
+    return sendManualMedia(c.id, contact.phone, media);
+  }
+
   async function onSend() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text && !attachment) return;
     setSending(true);
-    const res = await sendManualMessage(c.id, contact.phone, text);
+    const res = attachment
+      ? await sendAttachment(attachment, text)
+      : await sendManualMessage(c.id, contact.phone, text);
     setSending(false);
     if (res.ok) {
       setDraft("");
-      toast.success("Message envoyé.");
+      clearAttachment();
+      toast.success(attachment ? "Média envoyé." : "Message envoyé.");
       router.refresh();
     } else {
       toast.error(res.error ?? "Envoi échoué.");
+      router.refresh();
     }
   }
 
@@ -170,28 +225,68 @@ export function ConversationDetail({
               e.preventDefault();
               onSend();
             }}
-            className="border-t border-border p-3"
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes("Files")) return;
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              if (!e.dataTransfer.files.length) return;
+              e.preventDefault();
+              setDragging(false);
+              attach(e.dataTransfer.files[0]);
+            }}
+            className={cn("border-t border-border p-3 transition-colors", dragging && "bg-primary/5")}
           >
             {c.mode === "ai" && (
               <p className="mb-2 text-xs text-muted-foreground">
                 ✋ Envoyer un message manuel met l'IA en pause sur cette conversation.
               </p>
             )}
+            {attachment && (
+              <AttachmentPreview attachment={attachment} disabled={sending} onRemove={clearAttachment} />
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_FILES}
+              className="hidden"
+              onChange={(e) => attach(e.target.files?.[0])}
+            />
             <div className="flex items-end gap-2">
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending}
+                aria-label="Joindre un média"
+                title="Joindre une photo, vidéo, audio ou document"
+              >
+                <Paperclip className="size-4" />
+              </Button>
               <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                onPaste={(e) => {
+                  const file = Array.from(e.clipboardData.files)[0];
+                  if (file) {
+                    e.preventDefault();
+                    attach(file);
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     onSend();
                   }
                 }}
-                placeholder="Votre message…"
+                placeholder={attachment ? "Ajouter une légende…" : "Votre message…"}
                 rows={1}
                 className="max-h-32 min-h-10 flex-1 resize-none py-2"
               />
-              <Button type="submit" size="icon" disabled={sending || !draft.trim()} aria-label="Envoyer">
+              <Button type="submit" size="icon" disabled={sending || (!draft.trim() && !attachment)} aria-label="Envoyer">
                 {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
               </Button>
             </div>
@@ -387,6 +482,64 @@ function MessageBubble({ message }: { message: Message }) {
           {formatDateTime(message.created_at)}
         </p>
       </div>
+    </div>
+  );
+}
+
+interface PendingAttachment {
+  file: File;
+  type: ManualMedia["type"];
+  previewUrl: string | null;
+}
+
+const MB = 1024 * 1024;
+/** WhatsApp limits: 5 Mo images, 16 Mo video/audio; documents capped by Storage. */
+const MAX_MEDIA_BYTES: Record<ManualMedia["type"], number> = {
+  image: 5 * MB,
+  video: 16 * MB,
+  audio: 16 * MB,
+  document: 50 * MB,
+};
+
+const ACCEPTED_FILES =
+  "image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip";
+
+function mediaTypeOf(file: File): ManualMedia["type"] {
+  if (/^image\/(jpe?g|png|webp|gif)$/.test(file.type)) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+function AttachmentPreview({
+  attachment,
+  disabled,
+  onRemove,
+}: {
+  attachment: PendingAttachment;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  const { file, type, previewUrl } = attachment;
+  const Icon = type === "video" ? Film : type === "audio" ? Music : FileText;
+  const size = file.size < MB ? `${Math.max(1, Math.round(file.size / 1024))} Ko` : `${(file.size / MB).toFixed(1)} Mo`;
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-2">
+      {previewUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={previewUrl} alt="" className="size-14 shrink-0 rounded-md object-cover" />
+      ) : (
+        <div className="flex size-14 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Icon className="size-6 text-muted-foreground" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{file.name}</p>
+        <p className="text-xs text-muted-foreground">{size}</p>
+      </div>
+      <Button type="button" size="icon" variant="ghost" onClick={onRemove} disabled={disabled} aria-label="Retirer le média">
+        <X className="size-4" />
+      </Button>
     </div>
   );
 }

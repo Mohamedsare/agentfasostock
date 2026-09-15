@@ -14,6 +14,7 @@ import {
   type NormalizedProduct,
   type SyncResult,
 } from "@/lib/product-sync";
+import { normalizeMarkup } from "@/lib/pricing";
 import type { ActionResult } from "@/lib/actions/conversations";
 import type { ProductSource } from "@/lib/types";
 
@@ -48,6 +49,15 @@ const sourceSchema = z.object({
     .optional(),
   syncIntervalMinutes: z.number().int().min(10).max(10080),
   fieldMapping: mappingSchema,
+  /** Selling markup tiers (lib/pricing.ts); empty = sell at the API price. */
+  priceMarkup: z
+    .array(
+      z.object({
+        upTo: z.number().min(0).max(100_000_000).nullable(),
+        add: z.number().min(0).max(10_000_000),
+      }),
+    )
+    .max(10),
   isActive: z.boolean(),
 });
 
@@ -84,6 +94,7 @@ export async function saveProductSource(
     incremental_param: v.incrementalParam || null,
     sync_interval_minutes: v.syncIntervalMinutes,
     field_mapping: cleanMapping(v.fieldMapping),
+    price_markup: v.priceMarkup.length ? normalizeMarkup(v.priceMarkup) : null,
     is_active: v.isActive,
   };
   if (v.authType === "none" || v.apiKey === null) row.api_key_encrypted = null;
@@ -95,7 +106,14 @@ export async function saveProductSource(
     ? supabase.from("product_sources").update(row).eq("id", id).select("id").single()
     : supabase.from("product_sources").insert(row).select("id").single();
   const { data, error } = await query;
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    return {
+      ok: false,
+      error: /price_markup/.test(error.message)
+        ? "Appliquez la migration 0016 (marge de vente) dans Supabase, puis réessayez."
+        : error.message,
+    };
+  }
   revalidate();
   return { ok: true, id: data.id };
 }
@@ -136,6 +154,7 @@ export async function testProductSource(
         default_query: v.defaultQuery || null,
         per_page: v.perPage,
         pagination_style: v.paginationStyle,
+        price_markup: v.priceMarkup.length ? normalizeMarkup(v.priceMarkup) : null,
         field_mapping: cleanMapping(v.fieldMapping),
       },
       apiKey,

@@ -257,6 +257,12 @@ export function ProductsTab({
                   {p.price != null && (
                     <Badge tone="success">{formatPrice(p.price, p.currency)}</Badge>
                   )}
+                  {/* Supplier price — dashboard only, the agent only ever sees the selling price. */}
+                  {p.cost_price != null && p.price != null && p.cost_price !== p.price && (
+                    <Badge tone="neutral" title="Prix d'achat FasoStock (jamais communiqué au client)">
+                      Achat {formatPrice(p.cost_price, p.currency)}
+                    </Badge>
+                  )}
                   {p.in_stock === false ? (
                     <Badge tone="danger">Rupture</Badge>
                   ) : p.stock_quantity != null ? (
